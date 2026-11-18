@@ -15,8 +15,10 @@ export interface SceneBundle {
 /** Renderer, lights, sky and the city backdrop for the sunset rooftop theme. */
 export function createScene(container: HTMLElement): SceneBundle {
   const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  renderer.shadowMap.enabled = true;
+  // ?quality=low: half resolution, no shadows (weak GPUs / many tabs).
+  const low = new URLSearchParams(location.search).get('quality') === 'low';
+  renderer.setPixelRatio(low ? 0.5 : Math.min(window.devicePixelRatio, 2));
+  renderer.shadowMap.enabled = !low;
   renderer.shadowMap.type = THREE.PCFShadowMap;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;

@@ -5,6 +5,11 @@ import { ARENAS, arenaById } from '../sim/arenas';
 import { Bot } from '../sim/bot';
 import type { SimEvent } from '../sim/events';
 import type { PlayerInput } from '../sim/input';
+import { emptyInput } from '../sim/input';
+import type { WorldView } from '../sim/view';
+import { NetMatch } from './net/netMatch';
+import type { NetClient } from './net/netClient';
+import type { SlotInfo } from '../net/protocol';
 import { createScene } from './render/scene';
 import type { SceneBundle } from './render/scene';
 import { ArenaView } from './render/arenaView';
@@ -19,8 +24,10 @@ import type { InputManager, DeviceId } from './input/devices';
 import type { Sfx } from './audio/sfx';
 
 export interface Fighter {
-  device: DeviceId;
+  device: DeviceId | 'net';
   look: FighterLook;
+  /** Display label (device name locally, player name online). */
+  label?: string;
 }
 
 /** Which map(s) a match uses: a specific arena id, 'random' (one random map) or 'rotate' (new map every round). */
@@ -38,6 +45,8 @@ export class Game {
   readonly gfx: SceneBundle;
   arena: ArenaDef = ARENAS[0];
   sim: GameSim | null = null;
+  /** Online match (server-driven), when playing online. */
+  net: NetMatch | null = null;
   private arenaView: ArenaView;
   private theme: ThemeView;
   private mapChoice: MapChoice = ARENAS[0].id;
@@ -75,7 +84,54 @@ export class Game {
   }
 
   get running(): boolean {
-    return this.sim !== null;
+    return this.sim !== null || this.net !== null;
+  }
+
+  get online(): boolean {
+    return this.net !== null;
+  }
+
+  /** Whatever is being shown: the local simulation or the online replica. */
+  get world(): WorldView | null {
+    return this.net ? this.net.world : this.sim;
+  }
+
+  /** Our fighter in an online match was knocked out of the round. */
+  get spectating(): boolean {
+    const n = this.net;
+    if (!n) return false;
+    return n.you < 0 || n.world.characters[n.you]?.state === 'eliminated';
+  }
+
+  private makeViews(fighters: Fighter[]): void {
+    for (const v of this.views) {
+      this.gfx.scene.remove(v.root);
+      v.dispose();
+    }
+    this.views = fighters.map((f, i) => {
+      const v = new CharacterView(f.look, i);
+      this.gfx.scene.add(v.root);
+      return v;
+    });
+  }
+
+  /** Begin showing an online match (the server runs the simulation). */
+  startOnline(net: NetClient, arenaId: string, epoch: number, slots: SlotInfo[], you: number): void {
+    this.stop();
+    this.fighters = slots.map((s, i) => ({ device: 'net' as const, look: FIGHTERS[s.fighter] ?? FIGHTERS[0], label: s.bot ? 'Bot' : i === you ? 'You' : 'Online player' }));
+    this.fighters.forEach((f, i) => (f.look = { ...f.look, name: slots[i].name }));
+    this.net = new NetMatch(net, arenaId, epoch, slots, you);
+    this.showArena(this.net.world.arena);
+    this.makeViews(this.fighters);
+    this.paused = false;
+    this.rig.snap([new THREE.Vector3(0, 1, 0)]);
+  }
+
+  /** The server switched maps mid-match. */
+  onlineArena(arenaId: string, epoch: number): void {
+    if (!this.net) return;
+    this.net.changeArena(arenaId, epoch);
+    this.showArena(this.net.world.arena);
   }
 
   /** Swap the visible arena (scenery, theme, lighting). */
@@ -124,11 +180,7 @@ export class Game {
     const arena = this.firstArena(map);
     this.showArena(arena);
     this.sim = this.makeSim(arena);
-    this.views = fighters.map((f, i) => {
-      const v = new CharacterView(f.look, i);
-      this.gfx.scene.add(v.root);
-      return v;
-    });
+    this.makeViews(fighters);
     this.bots = fighters.map((f, i) => (f.device === 'bot' ? new Bot(i, (Math.random() * 1e9) | 0, 0.45 + Math.random() * 0.35) : null));
     this.paused = false;
     this.acc = 0;
@@ -137,14 +189,15 @@ export class Game {
   }
 
   stop(): void {
-    if (!this.sim) return;
     for (const v of this.views) {
       this.gfx.scene.remove(v.root);
       v.dispose();
     }
     this.views = [];
-    this.sim.dispose();
+    this.sim?.dispose();
     this.sim = null;
+    this.net = null;
+    this.gfx.renderer.domElement.style.filter = '';
   }
 
   setHoldToPunch(v: boolean): void {
@@ -157,8 +210,19 @@ export class Game {
     return this.fighters.map((f, i) => {
       const bot = this.bots[i];
       if (bot) return bot.think(sim, dt);
-      return this.input.read(f.device);
+      return this.input.read(f.device as DeviceId);
     });
+  }
+
+  /** Online: keyboard (WASD scheme + mouse) merged with the first gamepad. */
+  private onlineInput(): PlayerInput {
+    const a = this.input.read('kbA');
+    const b = this.input.read('pad0');
+    const out = emptyInput();
+    out.moveX = Math.max(-1, Math.min(1, a.moveX + b.moveX));
+    out.moveZ = Math.max(-1, Math.min(1, a.moveZ + b.moveZ));
+    for (const k of ['jump', 'punch', 'grab', 'lift', 'sprint', 'kick', 'headbutt', 'dive'] as const) out[k] = a[k] || b[k];
+    return out;
   }
 
   private frame(tMs: number): void {
@@ -184,26 +248,34 @@ export class Game {
       if (steps === 5) this.acc = 0; // fell behind; drop time rather than spiral
       if (sim.pendingArena) this.switchArena(sim.pendingArena.arena, sim.pendingArena.resume);
     }
-    const live = this.sim;
-    const alpha = live ? Math.min(1, this.acc / live.dt) : 0;
-    const vdt = this.paused ? 0 : dt;
+    const net = this.net;
+    if (net) {
+      // Online menus overlay the game but never pause it; don't send inputs while they're open.
+      net.sendInput(this.paused ? emptyInput() : this.onlineInput());
+      this.input.consume();
+      for (const ev of net.update()) this.handleEvent(ev);
+      this.gfx.renderer.domElement.style.filter = this.spectating ? 'grayscale(1) brightness(0.85)' : '';
+    }
+    const live: WorldView | null = this.world;
+    const alpha = net ? net.alpha : live && this.sim ? Math.min(1, this.acc / this.sim.dt) : 0;
+    const vdt = this.paused && !net ? 0 : dt;
     this.arenaView.update(live, alpha, vdt);
     this.theme.update(vdt, t);
     if (live) {
       live.characters.forEach((c, i) => this.views[i].update(c, live.prevSnap, live.currSnap, live.partOffset(i, 0), alpha, dt));
-      if (!this.paused) this.rig.update(this.focusPoints(), dt);
+      if (!this.paused || net) this.rig.update(this.focusPoints(), dt);
     } else {
       // Idle attract camera: slow orbit over the empty arena.
       this.gfx.camera.position.set(Math.sin(t * 0.15) * 15, 8.5, Math.cos(t * 0.15) * 15);
       this.gfx.camera.lookAt(0, 0.5, 0);
     }
-    this.fx.update(this.paused ? 0 : dt);
+    this.fx.update(vdt);
     this.gfx.renderer.render(this.gfx.scene, this.gfx.camera);
   }
 
   /** Points the shared camera should keep in view: active fighters still on (or near) the roof. */
   private focusPoints(): THREE.Vector3[] {
-    const sim = this.sim;
+    const sim = this.world;
     if (!sim) return [];
     const pts: THREE.Vector3[] = [];
     for (const c of sim.characters) {
@@ -303,7 +375,7 @@ export class Game {
         sfx.grunt(look(ev.char).voice, 0.7);
         break;
       case 'eliminated': {
-        const p = new THREE.Vector3(ev.pos.x, Math.max(ev.pos.y, this.sim ? this.sim.killY : -9), ev.pos.z);
+        const p = new THREE.Vector3(ev.pos.x, Math.max(ev.pos.y, this.world ? this.world.killY : -9), ev.pos.z);
         if (ev.cause === 'water') {
           this.fx.splash(new THREE.Vector3(ev.pos.x, -0.8, ev.pos.z));
           sfx.splash();

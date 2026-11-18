@@ -18,6 +18,12 @@ export interface Settings {
   slots: SlotSetup[];
   /** Arena id, 'random', or 'rotate' (new map every round). */
   map?: string;
+  /** Online identity (random, local to this browser). */
+  playerId?: string;
+  playerName?: string;
+  onlineFighter?: number;
+  /** Friend codes added by this player (names learned when they're online). */
+  friends?: { code: string; name: string | null }[];
 }
 
 const KEY = 'wobbleweights.settings.v1';
@@ -37,15 +43,23 @@ export const DEFAULT_SETTINGS: Settings = {
   ],
 };
 
+function withIdentity(s: Settings): Settings {
+  if (!s.playerId) {
+    s.playerId = (crypto.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`).replace(/[^a-zA-Z0-9-]/g, '');
+    saveSettings(s);
+  }
+  return s;
+}
+
 export function loadSettings(): Settings {
   try {
     const raw = localStorage.getItem(KEY);
-    if (!raw) return structuredClone(DEFAULT_SETTINGS);
+    if (!raw) return withIdentity(structuredClone(DEFAULT_SETTINGS));
     const s = JSON.parse(raw) as Partial<Settings>;
-    if (s.version !== 1) return structuredClone(DEFAULT_SETTINGS);
-    return { ...structuredClone(DEFAULT_SETTINGS), ...s } as Settings;
+    if (s.version !== 1) return withIdentity(structuredClone(DEFAULT_SETTINGS));
+    return withIdentity({ ...structuredClone(DEFAULT_SETTINGS), ...s } as Settings);
   } catch {
-    return structuredClone(DEFAULT_SETTINGS);
+    return withIdentity(structuredClone(DEFAULT_SETTINGS));
   }
 }
 

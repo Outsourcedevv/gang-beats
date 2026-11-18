@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { ArenaDef, PropDef, StaticPiece, SurfaceStyle } from '../../sim/arena';
 import { pieceRotation } from '../../sim/arena';
-import type { GameSim } from '../../sim/game';
+import type { WorldView } from '../../sim/view';
 import {
   beltTexture,
   brickTexture,
@@ -256,28 +256,27 @@ export class ArenaView {
     scene.add(this.group);
   }
 
-  update(sim: GameSim | null, alpha: number, dt: number): void {
+  update(world: WorldView | null, alpha: number, dt: number): void {
     this.time += dt;
     for (const b of this.belts) b.tex.offset.x = -(this.time * b.speed) / b.tile;
-    if (!sim || sim.arena.id !== this.arena.id) return;
-    const prev = sim.prevSnap;
-    const curr = sim.currSnap;
-    this.movers.forEach((g, i) => applySnap(g, prev, curr, sim.moverOffset(i), alpha));
-    sim.runtime.breakables.forEach((b, i) => {
-      const m = this.breakables[i];
-      m.visible = b.state !== 'gone';
+    if (!world || world.arena.id !== this.arena.id) return;
+    const prev = world.prevSnap;
+    const curr = world.currSnap;
+    this.movers.forEach((g, i) => applySnap(g, prev, curr, world.moverOffset(i), alpha));
+    this.breakables.forEach((m, i) => {
+      const st = world.breakState(i);
+      m.visible = st !== 'gone';
       if (!m.visible) return;
-      applySnap(m, prev, curr, sim.breakableOffset(i), alpha);
-      if (b.state === 'shaking') {
+      applySnap(m, prev, curr, world.breakableOffset(i), alpha);
+      if (st === 'shaking') {
         m.position.x += (Math.random() - 0.5) * 0.05;
         m.position.y += (Math.random() - 0.5) * 0.03;
         m.position.z += (Math.random() - 0.5) * 0.05;
       }
     });
-    sim.props.forEach((p, i) => {
-      const m = this.props[i];
-      m.visible = p.active;
-      if (p.active) applySnap(m, prev, curr, sim.propOffset(i), alpha);
+    this.props.forEach((m, i) => {
+      m.visible = world.propActive(i);
+      if (m.visible) applySnap(m, prev, curr, world.propOffset(i), alpha);
     });
   }
 

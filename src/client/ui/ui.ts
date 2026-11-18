@@ -10,6 +10,8 @@ import { ACTIONS, ACTION_LABELS, DEFAULT_BINDINGS, DEVICE_LABELS, keyLabel } fro
 import type { Settings } from '../storage';
 import { saveSettings } from '../storage';
 import type { Sfx } from '../audio/sfx';
+import { NetClient } from '../net/netClient';
+import { OnlineUI } from './online';
 
 type Attrs = Record<string, string | number | boolean | ((e: Event) => void)>;
 
@@ -61,6 +63,10 @@ export class UI {
   private controlsReturn: 'setup' | 'pause' = 'setup';
   private showStats = false;
   private scoreKey = '';
+  private tab: 'local' | 'online' = 'local';
+  readonly net: NetClient;
+  private online: OnlineUI;
+  private spectateEl!: HTMLElement;
 
   constructor(
     private readonly game: Game,
@@ -74,6 +80,36 @@ export class UI {
     this.buildControls();
     this.buildPause();
     this.buildHelp();
+    this.net = new NetClient(settings.playerId!);
+    this.net.onBinary = (buf) => this.game.net?.onSnapshot(buf);
+    this.online = new OnlineUI(this.net, settings, sfx, {
+      rerender: () => {
+        if (!this.setupEl.classList.contains('hidden')) this.renderSetup();
+        // Lost our room (left, kicked, disconnected) mid-match: back to the menu.
+        if (this.game.online && !this.net.room) this.leaveOnlineMatch();
+      },
+      showOnlineTab: () => {
+        this.tab = 'online';
+        if (!this.game.online) this.show('setup');
+      },
+      matchStart: (m) => {
+        this.sfx.unlock();
+        this.sfx.startAmbience();
+        this.game.paused = false;
+        this.game.startOnline(this.net, m.arena, m.epoch, m.slots, m.you);
+        this.buildCards();
+        this.scoreKey = '';
+        this.show('hud');
+      },
+      matchArena: (m) => this.game.onlineArena(m.arena, m.epoch),
+      matchEvents: (m) => this.game.net?.onEvents(m.epoch, m.tick, m.events),
+      matchOver: () => {
+        this.game.stop();
+        this.game.paused = false;
+        this.tab = 'online';
+        this.show('setup');
+      },
+    }, this.root);
     game.listener = { onEvent: (ev) => this.onEvent(ev) };
     input.onPause = () => this.togglePause();
     window.addEventListener('keydown', (e) => {
@@ -107,7 +143,47 @@ export class UI {
     this.root.append(this.setupEl);
   }
 
+  private tabs(): HTMLElement {
+    const tab = (id: 'local' | 'online', label: string) =>
+      h(
+        'button',
+        {
+          class: `tab ${this.tab === id ? 'on' : ''}`,
+          id: `tab-${id}`,
+          onclick: () => {
+            this.tab = id;
+            this.renderSetup();
+          },
+        },
+        label,
+      );
+    return h('div', { class: 'tabs' }, tab('local', 'Local play'), tab('online', 'Online'));
+  }
+
+  /** Re-render while keeping focus/caret in a text field the player is typing in. */
+  private replaceKeepingFocus(el: HTMLElement, content: HTMLElement): void {
+    const active = document.activeElement as HTMLInputElement | null;
+    const label = active && el.contains(active) ? active.getAttribute('aria-label') : null;
+    const caret = label ? active!.selectionStart : null;
+    el.replaceChildren(content);
+    if (label) {
+      const again = el.querySelector(`[aria-label="${label}"]`) as HTMLInputElement | null;
+      if (again) {
+        again.focus();
+        if (caret !== null && 'setSelectionRange' in again) again.setSelectionRange(caret, caret);
+      }
+    }
+  }
+
   private renderSetup(): void {
+    if (this.tab === 'online') {
+      this.online.activate();
+      this.replaceKeepingFocus(
+        this.setupEl,
+        h('div', { class: 'panel setup-panel' }, h('h1', { class: 'title' }, GAME_TITLE), this.tabs(), this.online.render()),
+      );
+      return;
+    }
     const s = this.settings;
     const pads = this.input.connectedPads();
     const active = s.slots.filter((x) => x.device !== 'off').length;
@@ -178,6 +254,7 @@ export class UI {
         'div',
         { class: 'panel setup-panel' },
         h('h1', { class: 'title' }, GAME_TITLE),
+        this.tabs(),
         h('p', { class: 'subtitle' }, 'Wobbly physics brawling on the rooftops. Last one standing wins the round — first to three rounds takes the match.'),
         h('div', { class: 'slots' }, ...slots),
         this.mapPicker(),
@@ -414,57 +491,78 @@ export class UI {
 
   // --------------------------------------------------------------------- pause
   private buildPause(): void {
-    this.pauseEl = h(
-      'div',
-      { class: 'screen pause hidden' },
-      h(
-        'div',
-        { class: 'panel small' },
-        h('h2', {}, 'Paused'),
-        h('button', { class: 'btn primary', onclick: () => this.togglePause() }, 'Resume'),
-        h(
-          'button',
-          {
-            class: 'btn',
-            onclick: () => {
-              this.game.sim?.rules.restartMatch();
-              this.togglePause();
-            },
-          },
-          'Restart match',
-        ),
-        h(
-          'button',
-          {
-            class: 'btn',
-            onclick: () => {
-              this.controlsReturn = 'pause';
-              this.show('controls');
-            },
-          },
-          'Controls',
-        ),
-        h(
-          'button',
-          {
-            class: 'btn',
-            onclick: () => {
-              this.game.stop();
-              this.game.paused = false;
-              this.show('setup');
-            },
-          },
-          'Change fighters',
-        ),
-      ),
-    );
+    this.pauseEl = h('div', { class: 'screen pause hidden' });
     this.root.append(this.pauseEl);
+  }
+
+  private renderPause(): void {
+    const controls = h(
+      'button',
+      {
+        class: 'btn',
+        onclick: () => {
+          this.controlsReturn = 'pause';
+          this.show('controls');
+        },
+      },
+      'Controls',
+    );
+    const resume = h('button', { class: 'btn primary', onclick: () => this.togglePause() }, 'Resume');
+    const panel = this.game.online
+      ? h(
+          'div',
+          { class: 'panel small' },
+          h('h2', {}, 'Menu'),
+          h('p', { class: 'note' }, 'Online matches keep running while this menu is open.'),
+          resume,
+          controls,
+          h('button', { class: 'btn', id: 'leave-match', onclick: () => this.net.send({ t: 'leave' }) }, 'Leave match'),
+        )
+      : h(
+          'div',
+          { class: 'panel small' },
+          h('h2', {}, 'Paused'),
+          resume,
+          h(
+            'button',
+            {
+              class: 'btn',
+              onclick: () => {
+                this.game.sim?.rules.restartMatch();
+                this.togglePause();
+              },
+            },
+            'Restart match',
+          ),
+          controls,
+          h(
+            'button',
+            {
+              class: 'btn',
+              onclick: () => {
+                this.game.stop();
+                this.game.paused = false;
+                this.show('setup');
+              },
+            },
+            'Change fighters',
+          ),
+        );
+    this.pauseEl.replaceChildren(panel);
+  }
+
+  private leaveOnlineMatch(): void {
+    this.game.stop();
+    this.game.paused = false;
+    this.tab = 'online';
+    this.show('setup');
   }
 
   private togglePause(): void {
     if (!this.game.running) return;
     if (!this.controlsEl.classList.contains('hidden')) return;
     this.game.paused = !this.game.paused;
+    if (this.game.paused) this.renderPause();
     this.show(this.game.paused ? 'pause' : 'hud');
   }
 
@@ -500,7 +598,8 @@ export class UI {
     this.tagsEl = h('div', { class: 'tags' });
     this.statsEl = h('div', { class: 'stats hidden' });
     this.warnEl = h('div', { class: 'warning hidden' });
-    this.hudEl = h('div', { class: 'hud hidden' }, this.tagsEl, this.scoreEl, this.warnEl, this.bannerEl, this.cardsEl, this.statsEl);
+    this.spectateEl = h('div', { class: 'spectate hidden' }, "You're out — spectating until the next round");
+    this.hudEl = h('div', { class: 'hud hidden' }, this.tagsEl, this.scoreEl, this.warnEl, this.spectateEl, this.bannerEl, this.cardsEl, this.statsEl);
     this.root.append(this.hudEl);
   }
 
@@ -510,8 +609,8 @@ export class UI {
         h(
           'div',
           { class: 'card', 'data-i': i, style: `--c:${hex(f.look.body)}` },
-          h('div', { class: 'card-name' }, `P${i + 1} ${f.look.name}`),
-          h('div', { class: 'card-dev' }, DEVICE_LABELS[f.device]),
+          h('div', { class: 'card-name' }, this.game.online ? f.look.name : `P${i + 1} ${f.look.name}`),
+          h('div', { class: 'card-dev' }, (f.label ?? (f.device === 'net' ? 'Online' : DEVICE_LABELS[f.device]))),
           h('div', { class: 'bar-label' }, 'daze'),
           h('div', { class: 'daze' }, h('div', { class: 'daze-fill' })),
           h('div', { class: 'bar-label' }, 'stamina'),
@@ -521,7 +620,14 @@ export class UI {
       ),
     );
     this.tagsEl.replaceChildren(
-      ...this.game.fighters.map((f, i) => h('div', { class: 'tag', style: `--c:${hex(f.look.body)}` }, `P${i + 1}`, h('div', { class: 'tag-stam' }, h('i')))),
+      ...this.game.fighters.map((f, i) =>
+        h(
+          'div',
+          { class: `tag ${f.label === 'You' ? 'you' : ''}`, style: `--c:${hex(f.look.body)}` },
+          this.game.online ? (f.label === 'You' ? `${f.look.name} (you)` : f.look.name) : `P${i + 1}`,
+          h('div', { class: 'tag-stam' }, h('i')),
+        ),
+      ),
     );
   }
 
@@ -560,7 +666,7 @@ export class UI {
         this.banner('BRAWL!', '', 1);
         break;
       case 'eliminated':
-        if (this.game.sim?.rules.phase === 'fight' || this.game.sim?.rules.phase === 'sandbox') this.banner(`${this.name(ev.char)} ${OUT_LINES[ev.cause]}`, '', 1.4);
+        if (this.game.world?.rules.phase === 'fight' || this.game.world?.rules.phase === 'sandbox') this.banner(`${this.name(ev.char)} ${OUT_LINES[ev.cause]}`, '', 1.4);
         if (this.game.sim?.rules.phase === 'sandbox') {
           // Practice mode: respawn after a moment.
           setTimeout(() => this.game.sim?.resetRound(), 1500);
@@ -592,7 +698,7 @@ export class UI {
   }
 
   private scoreLine(): string {
-    const sim = this.game.sim;
+    const sim = this.game.world;
     if (!sim) return '';
     return this.game.fighters.map((f, i) => `${f.look.name} ${sim.rules.scores[i]}`).join('  ·  ');
   }
@@ -603,7 +709,8 @@ export class UI {
     requestAnimationFrame(this.tick);
     const dt = this.lastTick ? Math.min(0.1, (now - this.lastTick) / 1000) : 1 / 60;
     this.lastTick = now;
-    const sim = this.game.sim;
+    const sim = this.game.world;
+    this.spectateEl.classList.toggle('hidden', !(this.game.spectating && sim?.rules.phase === 'fight'));
     if (!sim) return;
     if (this.bannerTimer > 0 && !this.game.paused) {
       this.bannerTimer -= dt;
@@ -657,7 +764,7 @@ export class UI {
             ? `KO'd! ${Math.max(0, c.koTimer).toFixed(1)}s`
             : c.exhausted
               ? 'Exhausted!'
-              : c.envGrips() > 0 && !c.grounded
+              : c.hanging
                 ? 'Hanging on — Jump to climb'
                 : c.daze > 60
                   ? 'Dazed'

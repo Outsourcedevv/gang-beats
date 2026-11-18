@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { Character } from '../../sim/character';
+import type { FighterView } from '../../sim/view';
 import { PART_DEFS, PART_INDEX } from '../../sim/ragdoll';
 import type { PartName } from '../../sim/ragdoll';
 import type { FighterLook } from './fighters';
@@ -276,7 +276,7 @@ export class CharacterView {
     this.squashVel += amount;
   }
 
-  update(char: Character, prev: Float32Array, curr: Float32Array, base: number, alpha: number, dt: number): void {
+  update(char: FighterView, prev: Float32Array, curr: Float32Array, base: number, alpha: number, dt: number): void {
     this.time += dt;
     this.root.visible = char.state !== 'eliminated';
     if (!this.root.visible) return;
@@ -303,7 +303,7 @@ export class CharacterView {
     this.updateStars(char);
   }
 
-  private expression(c: Character): Expression {
+  private expression(c: FighterView): Expression {
     if (c.state === 'ko') return 'ko';
     if (c.hurtTimer > 0) return 'hurt';
     if (c.effort > 0.5) return 'effort';
@@ -313,7 +313,7 @@ export class CharacterView {
     return 'normal';
   }
 
-  private updateFace(c: Character, dt: number): void {
+  private updateFace(c: FighterView, dt: number): void {
     const e = this.expression(c);
     const baseY = this.look.eyes === 'sleepy' ? 0.65 : this.look.eyes === 'wide' ? 1.15 : 1;
     this.blinkTimer -= dt;
@@ -379,7 +379,7 @@ export class CharacterView {
     this.mouth.scale.set(mouthW, THREE.MathUtils.lerp(this.mouth.scale.y, mouthOpen, 0.35), 0.4);
   }
 
-  private updateStars(c: Character): void {
+  private updateStars(c: FighterView): void {
     const show = c.state === 'ko' || c.daze > 70;
     const head = this.head.position;
     for (let i = 0; i < this.stars.length; i++) {

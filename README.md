@@ -17,24 +17,47 @@ Requires Node.js 20+.
 npm install
 ```
 
+Development (game server on :8787 + Vite client on :5173 with hot reload):
+
 ```bash
 npm run dev
 ```
 
-Then open http://localhost:5173. Other scripts:
+Open http://localhost:5173. Local play works with just the client; the
+**Online** tab needs the server (which `npm run dev` starts).
+
+Production (one process serves the built client and the WebSocket on :8787,
+or `PORT`):
+
+```bash
+npm run build
+```
+
+```bash
+npm start
+```
 
 | Command | What it does |
 | --- | --- |
-| `npm run build` | Type-check and produce a production build in `dist/` |
-| `npm run preview` | Serve the production build |
-| `npm test` | Run the headless physics/gameplay test suite (Vitest) |
-| `npm run typecheck` | TypeScript only |
+| `npm run dev` | Game server (auto-rebuild/restart) + Vite client |
+| `npm run dev:client` | Client only (local play) |
+| `npm run build` | Type-check, build the client (`dist/`) and the server (`dist-server/`) |
+| `npm start` | Run the production server (`/health` reports rooms/players) |
+| `npm test` | Headless simulation, map, codec and multiplayer-server tests (Vitest) |
+| `npm run test:e2e` | Three real browser clients playing online together (needs Playwright, see the file header) |
 
-## Current status: Stage 3 (four maps, local play)
+To play with friends over the internet, run `npm run build && npm start` on a
+machine they can reach (or put it behind any HTTPS reverse proxy — the client
+uses `wss://` automatically on HTTPS pages) and share the room's invite link.
 
-Stages 1–3 are **local multiplayer only** (shared keyboard / gamepads / bots on one
-screen). Online play is Stage 4 and is not implemented yet. See
-[`docs/CHECKLIST.md`](docs/CHECKLIST.md) for what works and what's next.
+## Online play
+
+- **Quick play** drops you into a public room (auto-starts when 2+ players are ready).
+- **Private room** gives you a 5-letter code and an invite link (`?room=CODE`).
+- **Friends:** everyone has a 6-letter friend code. Add friends' codes to see when they're online and which room they're in, and invite them from your room — they get a pop-up with a Join button.
+- **Lobby:** player list with fighter previews, ready flags, map voting, and host controls (bots, "new map each round", kick, start with 2+ fighters). If the host leaves, the next player takes over.
+- **In a match:** the server simulates everything (positions, physics, hits, knockouts, eliminations, rounds); clients send inputs and render interpolated snapshots ~120 ms behind. Knocked out of the round? Your screen goes grey and you spectate. Leave mid-match and a bot takes over your fighter; players who join mid-match watch until the next one. After the match winner is crowned everyone returns to the lobby.
+- Your online identity, name, fighter and friends list are stored in this browser only.
 
 ## Maps
 
@@ -97,18 +120,22 @@ src/
     rules.ts      Last-player-standing rounds, first to 3, time limit, map rotation
     bot.ts        AI that produces the same inputs a player would
     config.ts     All tuning numbers
+  net/      Wire protocol + binary input/snapshot codecs (shared by client and server)
   client/   Browser front end
     game.ts       Fixed-timestep loop, interpolation, event → sound/FX
     render/       three.js scene, per-map themes, arena meshes, character views, camera, FX
     input/        Keyboard / mouse / gamepad → PlayerInput, rebinding
     audio/        Procedural Web Audio sound effects
-    ui/           Setup screen, controls, pause menu, HUD
+    net/          WebSocket client, snapshot interpolation (NetWorld/NetMatch)
+    ui/           Setup screen, online menus + lobby, controls, pause menu, HUD
+server/     Node game server: rooms, matchmaking, friends/invites, match runner
 tests/      Vitest suite driving the real simulation headlessly
 ```
 
 The simulation is deliberately independent of rendering and fed only by
-`PlayerInput` objects, so the Stage 4 multiplayer server can run the exact same
-code authoritatively.
+`PlayerInput` objects, so the multiplayer server runs the exact same code
+authoritatively. Renderer and HUD draw a `WorldView`, implemented both by the
+local `GameSim` and by the online client's snapshot-fed `NetWorld`.
 
 ### How the characters move
 

@@ -3,9 +3,10 @@
 Status key: ✅ done and tested · 🟡 partial / basic version · ⬜ not started
 
 How things were verified: `npm test` runs the real simulation headlessly
-(42 tests); the browser build was driven with headless Chromium via Playwright
+(49 tests, including multiplayer-server tests with real WebSocket clients); the browser build was driven with headless Chromium via Playwright
 (setup → match → punching, grabbing, lifting, throwing, pause, rebinding,
-settings persistence) with no console errors. Feel/tuning still needs
+settings persistence) with no console errors; `tests/e2e/online.e2e.cjs` runs
+three separate browser clients against the real server and passes. Feel/tuning still needs
 hands-on playtesting on real hardware — the container only has a software
 renderer, so frame rates measured here (3–11 fps) say nothing about real GPUs.
 
@@ -54,7 +55,7 @@ Physics costs ~0.8 ms per step for 8 fighters.
 Bot-vs-bot tuning runs after Stage 2: rounds ~16–118 s (1v1) and ~17–110 s
 (4 players); bots climbed back from the edge several times per run.
 
-## Stage 3 — Maps ✅ (current)
+## Stage 3 — Maps ✅
 
 | Feature | Status | Notes |
 | --- | --- | --- |
@@ -75,8 +76,30 @@ Bot-vs-bot runs (4 bots, aggressive): Tar Top rounds ~25–110 s, Grinder Works
 ~20–200 s, Rush Hour ~15–30 s (narrow deck, very chaotic), Wobbleland ~13–90 s.
 Physics ≈ 0.7–1.2 ms per step with 8 fighters.
 
-## Stage 4 — Online multiplayer
-⬜ Node + WebSocket authoritative server running `src/sim`, interpolation/prediction, public matchmaking, private rooms + codes, friend invites, host controls, bots filling slots, per-player grey spectator screen.
+## Stage 4 — Online multiplayer ✅ (current)
+
+| Feature | Status | Notes |
+| --- | --- | --- |
+| Backend | ✅ | Node + `ws` WebSocket server (`server/`), also serves the built client; `/health` endpoint |
+| Server-authoritative simulation | ✅ | The server runs `GameSim` at 60 Hz: positions, physics, combat, KOs, eliminations, rounds, map switches |
+| Real-time networking | ✅ | Binary inputs (with tap latching so quick presses aren't lost) → server; binary snapshots (≈1.6 KB for 8 fighters on the busiest map, 30 Hz ≈ 50 KB/s per client) + JSON event batches → clients |
+| Latency handling | ✅ | Client interpolates ~117 ms behind a smoothed server-clock estimate; events released in sync with the interpolated view; slow clients skip snapshots instead of lagging. No client-side prediction (inputs feel RTT/2 + ~17 ms late) |
+| Public matchmaking | ✅ | Quick play joins the fullest public lobby or opens one; public rooms auto-start 5 s after 2+ players are all ready |
+| Private rooms + room codes | ✅ | 5-letter codes (no ambiguous characters), invite links `?room=CODE` |
+| Friend invitations | ✅ | Friend codes, live presence (online / which room), invite pop-ups with Join |
+| Map voting | ✅ | Most votes wins (ties random); optional "new map each round" rotation |
+| Lobby player list + previews | ✅ | Names, fighter previews, ready flags, host crown, bots listed |
+| Ready indicators | ✅ | |
+| Host controls | ✅ | Start (with just two fighters), bot count, map rotation, kick; host migrates if the host leaves |
+| Bots | ✅ | Run on the server; fill slots by host choice; take over leavers |
+| 4–8 players | ✅ | Up to 8 fighters per room |
+| Eliminated players spectate | ✅ | Grey screen + "spectating" banner; stay in the room; late joiners watch until the next match |
+| Stay in the lobby between matches | ✅ | Rounds continue within a match; afterwards everyone returns to the lobby |
+| Verified with separate browser clients | ✅ | 3 Playwright browser contexts: join by code, friend invite, votes, start, movement seen identically by the others, a punch registering on the victim's client, spectator mode, leaver → bot |
+| Team selection / random teams | ⬜ | Arrives with team modes in Stage 5 (no point picking teams before there are team modes) |
+
+Server cost: ~1 ms of physics per tick for an 8-fighter room, so one server
+process can host roughly 10 busy rooms.
 
 ## Stage 5 — Game modes
 🟡 Last player standing / free-for-all exists. ⬜ Team battles (2v2, 3v3), king of the hill, team objectives, mode selection.
@@ -88,7 +111,8 @@ Physics ≈ 0.7–1.2 ms per step with 8 fighters.
 ⬜ Music per map, more FX, LOD/perf passes, accessibility, UX polish.
 
 ## Known issues / limitations
-- Online multiplayer is not implemented yet (Stage 4). Everything is local, on one screen.
+- Online play has no client-side prediction: on high-latency connections your own fighter responds RTT/2 + ~120 ms (interpolation) late.
+- Online identity/friends are browser-local (no accounts yet).
 - Keyboard scheme B shares the keyboard with scheme A; for two players a gamepad is more comfortable.
 - Fighters hanging off the far (back) edge can be partly hidden behind the roof from the shared camera; their name tag and card still show them.
 - Physics feel has been tuned with automated tests and screenshots only; real playtesting will need follow-up tuning (see `src/sim/config.ts`).

@@ -13,6 +13,8 @@ import { clamp, makeRng, normalize, sub, len } from './math';
 import type { Vec3 } from './math';
 import { PART_COUNT, PART_INDEX } from './ragdoll';
 import { RoundRules } from './rules';
+import type { WorldView } from './view';
+import type { BreakState } from './arenaRuntime';
 import type { RulesResume } from './rules';
 
 type World = RAPIER_NS.World;
@@ -69,7 +71,7 @@ export const SNAP_STRIDE = 7;
  * resolution and round rules. Contains no rendering code so it can run in
  * Node for tests and (later) on the multiplayer server.
  */
-export class GameSim implements SimContext, ArenaHost {
+export class GameSim implements SimContext, ArenaHost, WorldView {
   readonly world: World;
   readonly arena: ArenaDef;
   readonly characters: Character[] = [];
@@ -427,6 +429,19 @@ export class GameSim implements SimContext, ArenaHost {
 
   propOffset(propIndex: number): number {
     return (this.characters.length * PART_COUNT + propIndex) * SNAP_STRIDE;
+  }
+
+  propActive(i: number): boolean {
+    return this.props[i]?.active ?? false;
+  }
+
+  breakState(i: number): BreakState {
+    return this.runtime.breakables[i]?.state ?? 'gone';
+  }
+
+  /** Number of bodies in a snapshot (for network encoding). */
+  get snapshotBodyCount(): number {
+    return this.snapBodies.length;
   }
 
   moverOffset(i: number): number {

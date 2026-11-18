@@ -221,6 +221,11 @@ export class Character {
     return this.state !== 'eliminated';
   }
 
+  /** Gripping scenery while off the ground. */
+  get hanging(): boolean {
+    return !this.grounded && this.envGrips() > 0;
+  }
+
   get torsoPos(): Vec3 {
     return this.part('torso').body.translation();
   }

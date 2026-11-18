@@ -188,6 +188,14 @@ export class Hub {
       case 'ready':
         conn.room?.setReady(conn, !!msg.ready);
         return;
+      case 'team':
+        conn.room?.setTeam(conn, Number(msg.team));
+        return;
+      case 'randomTeams': {
+        const err = conn.room?.shuffleTeams(conn);
+        if (err) conn.send({ t: 'error', message: err });
+        return;
+      }
       case 'vote':
         conn.room?.vote(conn, String(msg.map));
         return;

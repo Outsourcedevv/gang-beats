@@ -6,7 +6,7 @@ import type { SimEvent } from '../../sim/events';
 import type { PlayerInput } from '../../sim/input';
 import type { Vec3 } from '../../sim/math';
 import { PART_COUNT } from '../../sim/ragdoll';
-import type { RoundPhase } from '../../sim/rules';
+import type { ModeId } from '../../sim/modes';
 import type { FighterView, RulesView, WorldView } from '../../sim/view';
 import { buttonMask, decodeSnapshot, encodeInput } from '../../net/codec';
 import type { CharSnap, Snapshot } from '../../net/codec';
@@ -50,7 +50,7 @@ class NetFighter implements FighterView {
 export class NetWorld implements WorldView {
   readonly characters: NetFighter[];
   readonly killY: number;
-  rules: RulesView = { phase: 'countdown' as RoundPhase, round: 1, scores: [], roundTime: 0 };
+  rules: RulesView;
   prevSnap: Float32Array;
   currSnap: Float32Array;
   private propsActive: boolean[] = [];
@@ -62,16 +62,21 @@ export class NetWorld implements WorldView {
   constructor(
     readonly arena: ArenaDef,
     players: number,
+    readonly mode: ModeId = 'ffa',
+    readonly sides: number[] = Array.from({ length: players }, (_, i) => i),
   ) {
     this.killY = arena.killY ?? PHYSICS.killY;
     this.nChars = players;
-    this.nProps = arena.props.length + (arena.dropPool?.length ?? 0);
+    // Grab the Goods adds the trophy after the arena's own props.
+    this.nProps = arena.props.length + (arena.dropPool?.length ?? 0) + (mode === 'trophy' ? 1 : 0);
+    const teamMode = sides.some((s, i) => s !== i);
+    this.rules = { phase: 'countdown', round: 1, scores: [], roundTime: 0, mode, sides, teamMode, lives: [], points: [], hillIndex: 0, potatoHolder: -1, potatoTimer: 0 };
     this.nMovers = arena.movers?.length ?? 0;
     const nb = players * PART_COUNT + this.nProps + this.nMovers + (arena.breakables?.length ?? 0);
     this.prevSnap = new Float32Array(nb * 7);
     this.currSnap = new Float32Array(nb * 7);
     this.characters = Array.from({ length: players }, () => new NetFighter());
-    this.propsActive = [...arena.props.map(() => true), ...(arena.dropPool ?? []).map(() => false)];
+    this.propsActive = [...arena.props.map(() => true), ...(arena.dropPool ?? []).map(() => false), ...(mode === 'trophy' ? [true] : [])];
   }
 
   get bodyCount(): number {
@@ -103,7 +108,18 @@ export class NetWorld implements WorldView {
     this.currSnap.set(b.bodies.subarray(0, this.currSnap.length));
     const latest = alpha > 0.5 ? b : a;
     b.chars.forEach((c, i) => this.characters[i]?.apply(c));
-    this.rules = { phase: latest.phase, round: latest.round, scores: latest.scores, roundTime: latest.roundTime };
+    this.rules = {
+      ...this.rules,
+      phase: latest.phase,
+      round: latest.round,
+      scores: latest.scores,
+      roundTime: latest.roundTime,
+      lives: latest.lives,
+      points: latest.points,
+      hillIndex: latest.hillIndex,
+      potatoHolder: latest.potatoHolder,
+      potatoTimer: latest.potatoTimer,
+    };
     this.propsActive = latest.propActive;
     this.breaks = latest.breakStates;
     // Torso positions for the camera / name tags (torso is part 1).
@@ -142,15 +158,17 @@ export class NetMatch {
     readonly slots: SlotInfo[],
     /** Our fighter index, or -1 when spectating. */
     readonly you: number,
+    readonly mode: ModeId = 'ffa',
+    readonly sides: number[] = slots.map((_, i) => i),
   ) {
     this.epoch = epoch;
-    this.world = new NetWorld(arenaById(arenaId) ?? ARENAS[0], slots.length);
+    this.world = new NetWorld(arenaById(arenaId) ?? ARENAS[0], slots.length, mode, sides);
   }
 
   /** The server moved the match to another map. */
   changeArena(arenaId: string, epoch: number): void {
     this.epoch = epoch;
-    this.world = new NetWorld(arenaById(arenaId) ?? ARENAS[0], this.slots.length);
+    this.world = new NetWorld(arenaById(arenaId) ?? ARENAS[0], this.slots.length, this.mode, this.sides);
     this.buffer = [];
     this.eventQueue = [];
   }

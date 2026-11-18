@@ -3,10 +3,12 @@
 // Kept behind a tiny interface so cloud saves can replace it later.
 
 import type { DeviceId, KeyBindings } from './input/devices';
+import type { ModeId } from '../sim/modes';
 
 export interface SlotSetup {
   device: DeviceId;
   fighter: number; // index into FIGHTERS
+  team?: number;
 }
 
 export interface Settings {
@@ -18,6 +20,10 @@ export interface Settings {
   slots: SlotSetup[];
   /** Arena id, 'random', or 'rotate' (new map every round). */
   map?: string;
+  /** Local match mode and teams. */
+  mode?: ModeId;
+  teamsOn?: boolean;
+  teamCount?: number;
   /** Online identity (random, local to this browser). */
   playerId?: string;
   playerName?: string;

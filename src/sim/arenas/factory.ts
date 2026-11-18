@@ -144,6 +144,17 @@ export const FACTORY: ArenaDef = {
     { kind: 'intensify', start: 110, target: 0, scale: 0.45 },
     { kind: 'collapse', start: 150, breakables: ['panel0', 'panel3', 'panel1', 'panel2'], interval: 4, warn: 'The floor is giving way!' },
   ],
+  hills: [
+    { pos: { x: 0.5, y: 0, z: 0.9 }, radius: 1.3 },
+    { pos: { x: -5.7, y: 1.7, z: -0.1 }, radius: 1.1 },
+    { pos: { x: 3.4, y: 0, z: -1.4 }, radius: 1.4 },
+    { pos: { x: -2.8, y: 0, z: 0.9 }, radius: 1.5 },
+  ],
+  goals: [
+    { min: { x: -6.8, y: -0.2, z: 1.7 }, max: { x: -4.4, y: 2.5, z: 3.4 } },
+    { min: { x: 4.4, y: -0.2, z: 1.7 }, max: { x: 6.8, y: 2.5, z: 3.4 } },
+  ],
+  trophySpawn: { x: -1.4, y: 1.2, z: -1.4 },
   spawns: [
     { x: -2.4, y: 0, z: 0.8 },
     { x: 3.4, y: 0, z: 0.6 },

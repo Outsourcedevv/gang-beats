@@ -1,4 +1,5 @@
 import type { SimEvent } from '../sim/events';
+import type { ModeId } from '../sim/modes';
 
 // Wire protocol shared by the browser client and the Node server.
 // Lobby/control traffic is JSON text frames; inputs and snapshots are binary.
@@ -23,11 +24,18 @@ export interface MemberInfo {
   /** Joined while a match was running: watching until the next one. */
   spectating: boolean;
   friendCode: string;
+  /** Chosen team (team modes). */
+  team: number;
 }
 
 export interface RoomSettings {
   bots: number;
   mapMode: MapMode;
+  mode: ModeId;
+  /** Number of teams for team modes (2–4). */
+  teamCount: number;
+  /** For modes where teams are optional (lives, king of the hill). */
+  teamsOn: boolean;
 }
 
 export interface RoomInfo {
@@ -65,6 +73,8 @@ export type ClientMsg =
   | { t: 'join'; code: string }
   | { t: 'leave' }
   | { t: 'ready'; ready: boolean }
+  | { t: 'team'; team: number }
+  | { t: 'randomTeams' }
   | { t: 'vote'; map: string }
   | { t: 'settings'; settings: Partial<RoomSettings> }
   | { t: 'kick'; id: string }
@@ -78,7 +88,7 @@ export type ServerMsg =
   | { t: 'welcome'; playerId: string; friendCode: string }
   | { t: 'room'; room: RoomInfo | null }
   | { t: 'error'; message: string }
-  | { t: 'matchStart'; arena: string; epoch: number; slots: SlotInfo[]; you: number }
+  | { t: 'matchStart'; arena: string; epoch: number; slots: SlotInfo[]; you: number; mode: ModeId; sides: number[] }
   | { t: 'arena'; arena: string; epoch: number }
   | { t: 'events'; epoch: number; tick: number; events: SimEvent[] }
   | { t: 'matchOver' }

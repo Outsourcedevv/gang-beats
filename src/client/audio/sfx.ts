@@ -275,6 +275,28 @@ export class Sfx {
     this.noise(1.4, 'bandpass', 300, 900, 0.25, 0.8);
   }
 
+  boom(): void {
+    if (!this.ctx) return;
+    this.tone('sine', 120, 28, 0.9, 0.9);
+    this.noise(1.0, 'lowpass', 3000, 120, 0.8);
+  }
+
+  goal(): void {
+    if (!this.ctx) return;
+    [523, 659, 784, 1047, 1319].forEach((f, i) => this.tone('square', f, f, 0.16, 0.07, i * 0.07));
+    this.noise(1.2, 'bandpass', 1800, 900, 0.18, 0.7, 0.1);
+  }
+
+  tick(urgent: boolean): void {
+    if (!this.ctx || !this.throttle('tick', urgent ? 120 : 300)) return;
+    this.tone('square', urgent ? 1400 : 1000, urgent ? 1400 : 1000, 0.03, 0.05);
+  }
+
+  pop(): void {
+    if (!this.ctx) return;
+    this.tone('sine', 300, 900, 0.12, 0.12);
+  }
+
   // -------------------------------------------------------------- ambience
   private ambienceTheme = 'sunset-rooftop';
   private ambienceTimer: ReturnType<typeof setInterval> | null = null;

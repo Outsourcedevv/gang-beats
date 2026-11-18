@@ -35,6 +35,11 @@ export type SimEvent =
   | { type: 'bounce'; char: number; pos: Vec3 }
   | { type: 'crush'; char: number; pos: Vec3 }
   | { type: 'timeUp' }
+  | { type: 'respawn'; char: number }
+  | { type: 'hillMove'; index: number }
+  | { type: 'goal'; team: number; pos: Vec3 }
+  | { type: 'potatoPass'; from: number; to: number }
+  | { type: 'explode'; char: number; pos: Vec3 }
   | { type: 'arenaChange'; arena: string }
   | { type: 'roundStart'; round: number }
   | { type: 'fight' }

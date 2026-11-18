@@ -3,6 +3,7 @@ import type { RoomInfo, ServerMsg } from '../../net/protocol';
 import { MAX_ROOM } from '../../net/protocol';
 import { ARENAS } from '../../sim/arenas';
 import { FIGHTERS } from '../render/fighters';
+import { MODES, TEAM_COLORS, TEAM_NAMES, modeDef } from '../../sim/modes';
 import type { Settings } from '../storage';
 import { saveSettings } from '../storage';
 import type { Sfx } from '../audio/sfx';
@@ -358,6 +359,9 @@ export class OnlineUI {
     const playing = room.state === 'playing';
     const myVote = Object.entries(room.votes).find(([, ids]) => me && ids.includes(me.id))?.[0];
     const setBots = (n: number) => this.net.send({ t: 'settings', settings: { bots: n } });
+    const mdef = modeDef(room.settings.mode);
+    const teamsOn = mdef.teams === true || (mdef.teams === 'optional' && room.settings.teamsOn);
+    const teamCount = room.settings.teamCount;
     return h(
       'div',
       { class: 'lobby' },
@@ -378,6 +382,19 @@ export class OnlineUI {
             { class: m.ready ? 'ready' : '' },
             avatar(m.fighter),
             h('span', { class: 'mname' }, (m.host ? '👑 ' : '') + m.name + (m.id === me?.id ? ' (you)' : '')),
+            teamsOn
+              ? h(
+                  'button',
+                  {
+                    class: 'btn tiny team-btn',
+                    style: `--t:${hex(TEAM_COLORS[m.team % 4])}`,
+                    ...(m.id === me?.id ? {} : { disabled: true }),
+                    title: m.id === me?.id ? 'Switch team' : '',
+                    onclick: () => this.net.send({ t: 'team', team: (m.team + 1) % teamCount }),
+                  },
+                  TEAM_NAMES[m.team % 4],
+                )
+              : null,
             h('span', { class: 'mstate' }, m.spectating ? 'watching' : m.ready ? 'Ready!' : 'not ready'),
             isHost && !m.host ? h('button', { class: 'btn tiny', onclick: () => this.net.send({ t: 'kick', id: m.id }) }, 'Kick') : null,
           ),
@@ -387,6 +404,43 @@ export class OnlineUI {
         ),
       ),
       this.profile(),
+      h(
+        'div',
+        { class: 'votes' },
+        h('b', {}, `Mode: ${mdef.name}`),
+        isHost
+          ? h(
+              'div',
+              { class: 'map-row' },
+              ...MODES.map((md) =>
+                h(
+                  'button',
+                  { class: `map mode ${md.id === room.settings.mode ? 'picked' : ''}`, 'data-mode': md.id, title: md.blurb, onclick: () => this.net.send({ t: 'settings', settings: { mode: md.id } }) },
+                  h('span', { class: 'map-name' }, md.name),
+                ),
+              ),
+            )
+          : null,
+        h('div', { class: 'map-desc' }, mdef.blurb),
+        mdef.teams !== false && isHost
+          ? h(
+              'div',
+              { class: 'team-opts' },
+              mdef.teams === 'optional'
+                ? h(
+                    'label',
+                    {},
+                    h('input', { type: 'checkbox', ...(room.settings.teamsOn ? { checked: true } : {}), onchange: (e: Event) => this.net.send({ t: 'settings', settings: { teamsOn: (e.target as HTMLInputElement).checked } }) }),
+                    ' Play in teams',
+                  )
+                : null,
+              teamsOn && room.settings.mode !== 'trophy'
+                ? h('span', {}, 'Teams: ', ...[2, 3, 4].map((n) => h('button', { class: `btn tiny ${teamCount === n ? 'primary' : ''}`, onclick: () => this.net.send({ t: 'settings', settings: { teamCount: n } }) }, String(n))))
+                : null,
+              teamsOn ? h('button', { class: 'btn tiny', id: 'online-random-teams', onclick: () => this.net.send({ t: 'randomTeams' }) }, 'Random teams') : null,
+            )
+          : null,
+      ),
       h(
         'div',
         { class: 'votes' },

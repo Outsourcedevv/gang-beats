@@ -198,6 +198,7 @@ export class Bot {
       return inp;
     }
 
+    if (this.modeGoal(sim, inp, me, pos, tgt)) return inp;
     if (!tgt) return inp;
     const tp = tgt.part('pelvis').body.translation();
     const dx = tp.x - pos.x;
@@ -265,6 +266,83 @@ export class Bot {
     return inp;
   }
 
+  private steer(inp: PlayerInput, from: { x: number; z: number }, to: { x: number; z: number }, sprint = false): number {
+    const dx = to.x - from.x;
+    const dz = to.z - from.z;
+    const d = Math.hypot(dx, dz) || 1;
+    inp.moveX = dx / d;
+    inp.moveZ = dz / d;
+    inp.sprint = sprint;
+    return d;
+  }
+
+  /**
+   * Mode-specific objectives. Returns true when the objective decided this
+   * step's movement (the normal brawling logic is skipped).
+   */
+  private modeGoal(sim: GameSim, inp: PlayerInput, me: GameSim['characters'][number], pos: { x: number; y: number; z: number }, tgt: GameSim['characters'][number] | undefined): boolean {
+    const r = sim.rules;
+    const near = tgt ? Math.hypot(tgt.torsoPos.x - pos.x, tgt.torsoPos.z - pos.z) : 99;
+    if (r.mode === 'koth') {
+      const hill = sim.arena.hills?.[r.hillIndex];
+      if (!hill) return false;
+      const dh = Math.hypot(hill.pos.x - pos.x, hill.pos.z - pos.z);
+      // Get onto the hill; brawl only with whoever is close by.
+      if (dh > hill.radius * 0.6 && near > 1.6) {
+        this.steer(inp, pos, hill.pos, dh > 4 && me.stamina > 40);
+        if (hill.pos.y > pos.y + 0.3 && this.rng() < 0.03) inp.jump = true;
+        return true;
+      }
+      return false;
+    }
+    if (r.mode === 'trophy' && sim.trophyIndex >= 0) {
+      const trophy = sim.props[sim.trophyIndex].body;
+      const tp = trophy.translation();
+      const myTeam = r.sides[this.index];
+      const holding = me.arms.some((a) => a.grabBody === trophy);
+      const goal = sim.arena.goals?.[myTeam];
+      if (holding && goal) {
+        inp.grab = true;
+        inp.lift = true;
+        this.steer(inp, pos, { x: (goal.min.x + goal.max.x) / 2, z: (goal.min.z + goal.max.z) / 2 });
+        return true;
+      }
+      const holder = sim.characters.find((c) => c.arms.some((a) => a.grabBody === trophy));
+      if (holder && r.sides[holder.index] !== myTeam) {
+        // Go after the carrier.
+        this.target = holder.index;
+        return false;
+      }
+      if (!holder) {
+        const d = this.steer(inp, pos, tp, me.stamina > 40);
+        inp.grab = d < 1.3;
+        inp.lift = false;
+        return true;
+      }
+      return false; // a teammate has it: escort by fighting
+    }
+    if (r.mode === 'potato') {
+      const holder = sim.characters[r.potatoHolder];
+      if (!holder || !holder.alive) return false;
+      if (holder === me) {
+        // Pass it on! Chase the nearest opponent and swing.
+        return false;
+      }
+      const hp = holder.torsoPos;
+      const d = Math.hypot(hp.x - pos.x, hp.z - pos.z);
+      if (d < 4) {
+        // Run away from the bomb (towards the middle-ish so we don't run off the edge).
+        const b = sim.arena.bounds;
+        const cx = (b.minX + b.maxX) / 2;
+        const cz = (b.minZ + b.maxZ) / 2;
+        const away = { x: pos.x + (pos.x - hp.x) + (cx - pos.x) * 0.3, z: pos.z + (pos.z - hp.z) + (cz - pos.z) * 0.3 };
+        this.steer(inp, pos, away, me.stamina > 30);
+        return true;
+      }
+    }
+    return false;
+  }
+
   private pickTarget(sim: GameSim): void {
     const me = sim.characters[this.index];
     const p = me.part('pelvis').body.translation();
@@ -272,6 +350,7 @@ export class Bot {
     let bestD = Infinity;
     for (const c of sim.characters) {
       if (c.index === this.index || !c.alive) continue;
+      if (sim.rules.sides[c.index] === sim.rules.sides[this.index]) continue; // teammate
       const q = c.part('pelvis').body.translation();
       // Prefer the closest, with a little randomness.
       const d = Math.hypot(q.x - p.x, q.z - p.z) * (0.8 + this.rng() * 0.4);

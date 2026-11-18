@@ -2,6 +2,8 @@ import type { Game } from '../game';
 import type { SimEvent } from '../../sim/events';
 import { ROUND_TIME_LIMIT, WINS_TO_WIN_MATCH } from '../../sim/rules';
 import { ARENAS } from '../../sim/arenas';
+import { KOTH_TARGET, MODES, TEAM_COLORS, TEAM_NAMES, TROPHY_TARGET, modeDef, randomTeams } from '../../sim/modes';
+import type { ModeId } from '../../sim/modes';
 import type { EliminationCause } from '../../sim/arena';
 import { COMBAT, STAMINA } from '../../sim/config';
 import { FIGHTERS } from '../render/fighters';
@@ -37,6 +39,7 @@ const OUT_LINES: Record<EliminationCause, string> = {
   grinder: 'went through the grinder!',
   molten: 'took a lava bath!',
   building: 'fell through the skylight!',
+  potato: 'went KABOOM!',
 };
 
 const DEVICE_ORDER: DeviceId[] = ['kbA', 'kbB', 'pad0', 'pad1', 'pad2', 'pad3', 'bot', 'off'];
@@ -96,7 +99,7 @@ export class UI {
         this.sfx.unlock();
         this.sfx.startAmbience();
         this.game.paused = false;
-        this.game.startOnline(this.net, m.arena, m.epoch, m.slots, m.you);
+        this.game.startOnline(this.net, m.arena, m.epoch, m.slots, m.you, m.mode, m.sides);
         this.buildCards();
         this.scoreKey = '';
         this.show('hud');
@@ -245,6 +248,21 @@ export class UI {
           h('button', { class: 'arrow', onclick: cycle(1), 'aria-label': 'Next fighter' }, '▶'),
         ),
         select,
+        this.localTeams() && !off
+          ? h(
+              'button',
+              {
+                class: 'btn tiny team-btn',
+                style: `--t:${hex(TEAM_COLORS[slot.team ?? i % 2])}`,
+                onclick: () => {
+                  slot.team = ((slot.team ?? i % 2) + 1) % this.localTeamCount();
+                  this.persist();
+                  this.renderSetup();
+                },
+              },
+              `${TEAM_NAMES[(slot.team ?? i % 2) % this.localTeamCount()]} team`,
+            )
+          : null,
       );
     });
 
@@ -257,7 +275,9 @@ export class UI {
         this.tabs(),
         h('p', { class: 'subtitle' }, 'Wobbly physics brawling on the rooftops. Last one standing wins the round — first to three rounds takes the match.'),
         h('div', { class: 'slots' }, ...slots),
+        this.modePicker(),
         this.mapPicker(),
+        this.setupError ? h('p', { class: 'error' }, this.setupError) : null,
         h(
           'div',
           { class: 'options' },
@@ -328,6 +348,102 @@ export class UI {
     );
   }
 
+  private setupError = '';
+
+  /** Does the local match use teams? */
+  private localTeams(): boolean {
+    const d = modeDef(this.settings.mode ?? 'ffa');
+    return d.teams === true || (d.teams === 'optional' && !!this.settings.teamsOn);
+  }
+
+  private localTeamCount(): number {
+    return (this.settings.mode ?? 'ffa') === 'trophy' ? 2 : Math.max(2, Math.min(4, this.settings.teamCount ?? 2));
+  }
+
+  private modePicker(): HTMLElement {
+    const s = this.settings;
+    const current = s.mode ?? 'ffa';
+    const def = modeDef(current);
+    const set = (m: ModeId) => () => {
+      s.mode = m;
+      this.setupError = '';
+      this.persist();
+      this.sfx.click();
+      this.renderSetup();
+    };
+    return h(
+      'div',
+      { class: 'maps modes' },
+      h('div', { class: 'maps-title' }, 'Mode'),
+      h(
+        'div',
+        { class: 'map-row' },
+        ...MODES.map((m) => h('button', { class: `map mode ${m.id === current ? 'picked' : ''}`, 'data-mode': m.id, title: m.blurb, onclick: set(m.id) }, h('span', { class: 'map-name' }, m.name))),
+      ),
+      h('div', { class: 'map-desc' }, def.blurb),
+      def.teams !== false
+        ? h(
+            'div',
+            { class: 'team-opts' },
+            def.teams === 'optional'
+              ? h(
+                  'label',
+                  {},
+                  h('input', {
+                    type: 'checkbox',
+                    ...(s.teamsOn ? { checked: true } : {}),
+                    onchange: (e: Event) => {
+                      s.teamsOn = (e.target as HTMLInputElement).checked;
+                      this.persist();
+                      this.renderSetup();
+                    },
+                  }),
+                  ' Play in teams',
+                )
+              : null,
+            this.localTeams() && current !== 'trophy'
+              ? h(
+                  'span',
+                  {},
+                  'Teams: ',
+                  ...[2, 3, 4].map((n) =>
+                    h(
+                      'button',
+                      {
+                        class: `btn tiny ${this.localTeamCount() === n ? 'primary' : ''}`,
+                        onclick: () => {
+                          s.teamCount = n;
+                          this.persist();
+                          this.renderSetup();
+                        },
+                      },
+                      String(n),
+                    ),
+                  ),
+                )
+              : null,
+            this.localTeams()
+              ? h(
+                  'button',
+                  {
+                    class: 'btn tiny',
+                    id: 'random-teams',
+                    onclick: () => {
+                      const active = s.slots.filter((x) => x.device !== 'off');
+                      const t = randomTeams(active.length, this.localTeamCount());
+                      active.forEach((x, i) => (x.team = t[i]));
+                      this.persist();
+                      this.renderSetup();
+                    },
+                  },
+                  'Random teams',
+                )
+              : null,
+          )
+        : null,
+    );
+  }
+
   private mapPicker(): HTMLElement {
     const s = this.settings;
     const current = s.map ?? 'rotate';
@@ -380,12 +496,28 @@ export class UI {
   private startMatch(): void {
     this.sfx.unlock();
     this.sfx.startAmbience();
-    const fighters = this.settings.slots
-      .filter((s) => s.device !== 'off')
-      .map((s) => ({ device: s.device, look: FIGHTERS[s.fighter] }));
+    const active = this.settings.slots.filter((s) => s.device !== 'off');
+    const fighters = active.map((s) => ({ device: s.device, look: FIGHTERS[s.fighter] }));
     if (!fighters.length) return;
+    const mode = this.settings.mode ?? 'ffa';
+    let teams: number[] | undefined;
+    if (this.localTeams()) {
+      const n = this.localTeamCount();
+      teams = active.map((s, i) => (s.team ?? i % 2) % n);
+      if (fighters.length >= 2 && new Set(teams).size < 2) {
+        this.setupError = 'Put fighters on at least two different teams (or press Random teams).';
+        this.renderSetup();
+        return;
+      }
+    }
+    if (mode !== 'ffa' && fighters.length < 2) {
+      this.setupError = 'This mode needs at least two fighters — add a bot!';
+      this.renderSetup();
+      return;
+    }
+    this.setupError = '';
     this.game.setHoldToPunch(this.settings.holdToPunch);
-    this.game.start(fighters, this.settings.map ?? 'rotate');
+    this.game.start(fighters, this.settings.map ?? 'rotate', mode, teams);
     this.buildCards();
     this.scoreKey = '';
     this.helpEl.classList.toggle('hidden', false);
@@ -652,6 +784,13 @@ export class UI {
     this.bannerTimer = seconds;
   }
 
+  /** Display name of a scoring side: a team, or a single fighter. */
+  private sideName(side: number): string {
+    const r = this.game.world?.rules;
+    if (r?.teamMode) return `${TEAM_NAMES[side % TEAM_NAMES.length]} team`;
+    return this.name(side);
+  }
+
   private name(i: number): string {
     const f = this.game.fighters[i];
     return f ? f.look.name : '???';
@@ -675,6 +814,18 @@ export class UI {
       case 'warning':
         this.warn(ev.text);
         break;
+      case 'goal':
+        this.banner(`GOAL! ${TEAM_NAMES[ev.team]} team`, this.goalLine(), 1.8);
+        break;
+      case 'hillMove':
+        this.warn('The hill has moved!');
+        break;
+      case 'potatoPass':
+        if (this.game.online && ev.to === this.game.net?.you) this.warn("You've got the bomb — pass it on!");
+        else if (ev.from < 0) this.warn(`${this.name(ev.to)} has the bomb!`);
+        break;
+      case 'explode':
+        break;
       case 'timeUp':
         this.warn("Time's up!");
         break;
@@ -684,11 +835,11 @@ export class UI {
         break;
       }
       case 'roundEnd':
-        if (ev.winner >= 0) this.banner(`${this.name(ev.winner)} wins the round!`, this.scoreLine(), 3.4);
+        if (ev.winner >= 0) this.banner(`${this.sideName(ev.winner)} wins the round!`, this.scoreLine(), 3.4);
         else this.banner('Draw!', 'Nobody survived that one.', 3.4);
         break;
       case 'matchEnd':
-        this.banner(`${this.name(ev.winner)} wins the match!`, `First to ${WINS_TO_WIN_MATCH} — new match starting soon`, 6.2);
+        this.banner(`${this.sideName(ev.winner)} wins the match!`, `First to ${WINS_TO_WIN_MATCH} — new match starting soon`, 6.2);
         break;
       case 'ko':
         break;
@@ -697,10 +848,16 @@ export class UI {
     }
   }
 
+  private goalLine(): string {
+    const r = this.game.world?.rules;
+    if (!r) return '';
+    return r.points.map((p, t) => `${TEAM_NAMES[t]} ${p}`).join('  ·  ') + `  (first to ${TROPHY_TARGET})`;
+  }
+
   private scoreLine(): string {
     const sim = this.game.world;
     if (!sim) return '';
-    return this.game.fighters.map((f, i) => `${f.look.name} ${sim.rules.scores[i]}`).join('  ·  ');
+    return sim.rules.scores.map((sc, side) => `${this.sideName(side)} ${sc}`).join('  ·  ');
   }
 
   private lastTick = 0;
@@ -725,22 +882,33 @@ export class UI {
     const left = Math.max(0, ROUND_TIME_LIMIT - rules.roundTime);
     const clock = rules.phase === 'fight' ? `${Math.floor(rules.roundTime / 60)}:${String(Math.floor(rules.roundTime % 60)).padStart(2, '0')}` : '';
     const timeText = rules.phase === 'fight' && left < 30 ? ` · ${Math.ceil(left)}s left!` : clock ? ` · ${clock}` : '';
-    const key = `${rules.phase}|${rules.round}|${rules.scores.join(',')}|${sim.characters.map((c) => (c.alive ? 1 : 0)).join('')}|${timeText}|${sim.arena.id}`;
+    const mode = rules.mode;
+    const extra = (side: number) =>
+      mode === 'koth' ? ` ${Math.floor(rules.points[side] ?? 0)}/${KOTH_TARGET}` : mode === 'trophy' ? ` ⚑${rules.points[side] ?? 0}/${TROPHY_TARGET}` : '';
+    const holder = mode === 'potato' && rules.phase === 'fight' && rules.potatoHolder >= 0 ? rules.potatoHolder : -1;
+    const potatoText = holder >= 0 ? `💣 ${this.name(holder)} ${rules.potatoTimer.toFixed(1)}s` : '';
+    const key = [rules.phase, rules.round, rules.scores.join(','), sim.characters.map((c) => (c.alive ? 1 : 0)).join(''), timeText, sim.arena.id, rules.points.map((p) => Math.floor(p)).join(','), rules.lives.join(','), potatoText].join('|');
     if (key === this.scoreKey) {
       // unchanged
     } else if (rules.phase !== 'sandbox') {
       this.scoreKey = key;
+      const sides = rules.scores.map((_, side) => side);
       this.scoreEl.replaceChildren(
-        h('div', { class: `round ${left < 30 && rules.phase === 'fight' ? 'urgent' : ''}` }, `${sim.arena.name} · Round ${rules.round}${timeText}`),
-        ...this.game.fighters.map((f, i) =>
-          h(
+        h('div', { class: `round ${left < 30 && rules.phase === 'fight' ? 'urgent' : ''}` }, `${sim.arena.name} · ${modeDef(mode).name} · Round ${rules.round}${timeText}`),
+        ...sides.map((side) => {
+          const members = rules.sides.map((x, i) => (x === side ? i : -1)).filter((i) => i >= 0);
+          const out = members.every((i) => !sim.characters[i]?.alive);
+          const color = rules.teamMode ? TEAM_COLORS[side % TEAM_COLORS.length] : (this.game.fighters[side]?.look.body ?? 0xffffff);
+          const hearts = mode === 'lives' && !rules.teamMode ? ' ' + '♥'.repeat(rules.lives[side] ?? 0) : '';
+          return h(
             'div',
-            { class: `score ${sim.characters[i].alive ? '' : 'out'}`, style: `--c:${hex(f.look.body)}` },
+            { class: `score ${out ? 'out' : ''}`, style: `--c:${hex(color)}` },
             h('span', { class: 'dot' }),
-            f.look.name,
-            h('span', { class: 'pips' }, ...Array.from({ length: WINS_TO_WIN_MATCH }, (_, k) => h('i', { class: k < rules.scores[i] ? 'on' : '' }))),
-          ),
-        ),
+            this.sideName(side) + extra(side) + hearts,
+            h('span', { class: 'pips' }, ...Array.from({ length: WINS_TO_WIN_MATCH }, (_, k) => h('i', { class: k < rules.scores[side] ? 'on' : '' }))),
+          );
+        }),
+        potatoText ? h('div', { class: `round potato ${rules.potatoTimer < 4 ? 'urgent' : ''}` }, potatoText) : '',
       );
     } else {
       this.scoreKey = key;
@@ -771,6 +939,12 @@ export class UI {
                   : '';
       if (state.textContent !== label) state.textContent = label;
       card.classList.toggle('out', c.state === 'eliminated');
+      const r = sim.rules;
+      if (r.teamMode) card.style.borderLeftColor = hex(TEAM_COLORS[r.sides[i] % TEAM_COLORS.length]);
+      if (r.mode === 'lives') {
+        const hearts = '♥'.repeat(r.lives[i] ?? 0);
+        if (!label && state.textContent !== hearts) state.textContent = hearts;
+      }
       card.classList.toggle('ko', c.state === 'ko');
     });
     // Name tags above heads.

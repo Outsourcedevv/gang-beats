@@ -134,6 +134,17 @@ export const FUNFAIR: ArenaDef = {
     { kind: 'speed', start: 90, mover: 'carousel', scale: 2.6, warn: 'The carousel has gone haywire!' },
     { kind: 'collapse', start: 120, breakables: ['rotBack', 'rotFrontL', 'rotFrontR', 'rotLeft', 'rotRight'], interval: 1.5, warn: 'The pier is rotting away!' },
   ],
+  hills: [
+    { pos: { x: 0, y: 0, z: -0.5 }, radius: 1.7 },
+    { pos: { x: -5.3, y: 0, z: 1.6 }, radius: 1.3 },
+    { pos: { x: 5.3, y: 0, z: -2.6 }, radius: 1.3 },
+    { pos: { x: 0, y: 0, z: 3.3 }, radius: 1.2 },
+  ],
+  goals: [
+    { min: { x: -7.4, y: -0.2, z: -3.5 }, max: { x: -6.0, y: 2.5, z: -1.6 } },
+    { min: { x: 6.0, y: -0.2, z: 0.4 }, max: { x: 7.4, y: 2.5, z: 2.4 } },
+  ],
+  trophySpawn: { x: 0, y: 1.0, z: 3.3 },
   spawns: [
     { x: -5.4, y: 0, z: 1.2 },
     { x: 5.4, y: 0, z: -2.6 },

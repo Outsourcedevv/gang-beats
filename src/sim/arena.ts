@@ -57,7 +57,7 @@ export type StaticPiece = StaticBox | StaticCylinder;
 
 export interface PropDef {
   id: string;
-  shape: 'crate' | 'barrel' | 'cone' | 'ball';
+  shape: 'crate' | 'barrel' | 'cone' | 'ball' | 'trophy';
   pos: Vec3;
   half: Vec3; // crate half extents; barrel/cone: x=radius, y=halfHeight; ball: x=radius
   mass: number;
@@ -102,7 +102,7 @@ export interface BreakableDef {
   mass?: number;
 }
 
-export type EliminationCause = 'fall' | 'water' | 'road' | 'grinder' | 'molten' | 'building';
+export type EliminationCause = 'fall' | 'water' | 'road' | 'grinder' | 'molten' | 'building' | 'potato';
 
 export type HazardDef =
   | { kind: 'kill'; box: Box3; cause: EliminationCause }
@@ -154,6 +154,11 @@ export interface ArenaDef {
   throwTargets?: Vec3[];
   /** Renderer hint: speed the world appears to scroll past (vehicle maps). */
   scrollSpeed?: number;
+  /** King of the hill zones (cycled through during a round). */
+  hills?: { pos: Vec3; radius: number }[];
+  /** Grab the Goods: one goal per team (team 0, team 1) and where the trophy appears. */
+  goals?: [Box3, Box3];
+  trophySpawn?: Vec3;
 }
 
 export { TAR_TOP as TEST_ARENA } from './arenas/tarTop';

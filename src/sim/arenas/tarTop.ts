@@ -116,6 +116,17 @@ export const TAR_TOP: ArenaDef = {
     { kind: 'gust', start: 45, every: [14, 22], accel: 7, duration: 1.4, warn: 'Gust of wind!' },
     { kind: 'intensify', start: 120, target: 0, scale: 0.5, warn: 'The wind is picking up!' },
   ],
+  hills: [
+    { pos: { x: -2.6, y: 0, z: 1.2 }, radius: 1.6 },
+    { pos: { x: -4.2, y: 1.2, z: -2.6 }, radius: 1.1 },
+    { pos: { x: 2.8, y: 0, z: -1.8 }, radius: 1.6 },
+    { pos: { x: 5.2, y: 1.68, z: 2.6 }, radius: 1.2 },
+  ],
+  goals: [
+    { min: { x: -7.8, y: -0.2, z: -1.4 }, max: { x: -5.8, y: 2.5, z: 1.6 } },
+    { min: { x: 6.2, y: -0.2, z: -1.6 }, max: { x: 7.8, y: 2.5, z: 0.6 } },
+  ],
+  trophySpawn: { x: 0.6, y: 1.2, z: -2.2 },
   spawns: [
     { x: -2.8, y: 0, z: 0.6 },
     { x: 2.8, y: 0, z: 0.6 },

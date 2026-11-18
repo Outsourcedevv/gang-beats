@@ -82,7 +82,13 @@ export interface Snapshot {
   roundTime: number;
   phase: RoundPhase;
   round: number;
+  /** Round wins and in-round points per side. */
   scores: number[];
+  points: number[];
+  lives: number[];
+  hillIndex: number;
+  potatoHolder: number;
+  potatoTimer: number;
   chars: CharSnap[];
   /** Body transforms: 7 floats per body (pos + quat), in GameSim snapshot order. */
   bodies: Float32Array;
@@ -97,7 +103,8 @@ export function encodeSnapshot(sim: GameSim, epoch: number): ArrayBuffer {
   const nb = sim.snapshotBodyCount;
   const np = sim.props.length;
   const nk = sim.runtime.breakables.length;
-  const size = 1 + 1 + 4 + 4 + 1 + 1 + 1 + nc * 6 + 2 + nb * 14 + 1 + Math.ceil(np / 8) + 1 + nk;
+  const ns = sim.rules.sideCount;
+  const size = 1 + 1 + 4 + 4 + 1 + 1 + 1 + ns * 3 + 1 + nc * 6 + 3 + 2 + nb * 14 + 1 + Math.ceil(np / 8) + 1 + nk;
   const buf = new ArrayBuffer(size);
   const v = new DataView(buf);
   let o = 0;
@@ -109,10 +116,16 @@ export function encodeSnapshot(sim: GameSim, epoch: number): ArrayBuffer {
   o += 4;
   v.setUint8(o++, PHASES.indexOf(sim.rules.phase));
   v.setUint8(o++, sim.rules.round);
+  v.setUint8(o++, ns);
+  for (let i = 0; i < ns; i++) {
+    v.setUint8(o++, sim.rules.scores[i] ?? 0);
+    v.setUint16(o, Math.min(65535, Math.round((sim.rules.points[i] ?? 0) * 10)), true);
+    o += 2;
+  }
   v.setUint8(o++, nc);
   for (let i = 0; i < nc; i++) {
     const c = sim.characters[i];
-    v.setUint8(o++, sim.rules.scores[i] ?? 0);
+    v.setUint8(o++, sim.rules.lives[i] ?? 0);
     v.setUint8(o++, STATES.indexOf(c.state));
     v.setUint8(o++, Math.max(0, Math.min(255, Math.round(c.daze * 2))));
     v.setUint8(o++, Math.max(0, Math.min(255, Math.round(c.stamina * 2))));
@@ -121,6 +134,9 @@ export function encodeSnapshot(sim: GameSim, epoch: number): ArrayBuffer {
       (c.exhausted ? 1 : 0) | (c.hanging ? 2 : 0) | (c.hurtTimer > 0 ? 4 : 0) | (c.effort > 0.5 ? 8 : 0) | (c.airTime > 0.6 || c.liftedBy >= 0 ? 16 : 0);
     v.setUint8(o++, flags);
   }
+  v.setUint8(o++, sim.rules.hillIndex);
+  v.setInt8(o++, sim.rules.potatoHolder);
+  v.setUint8(o++, Math.max(0, Math.min(255, Math.round(sim.rules.potatoTimer * 10))));
   v.setUint16(o, nb, true);
   o += 2;
   const s = sim.currSnap;
@@ -158,11 +174,19 @@ export function decodeSnapshot(data: ArrayBuffer | Uint8Array): Snapshot | null 
   o += 4;
   const phase = PHASES[v.getUint8(o++)] ?? 'fight';
   const round = v.getUint8(o++);
-  const nc = v.getUint8(o++);
+  const ns = v.getUint8(o++);
   const scores: number[] = [];
-  const chars: CharSnap[] = [];
-  for (let i = 0; i < nc; i++) {
+  const points: number[] = [];
+  for (let i = 0; i < ns; i++) {
     scores.push(v.getUint8(o++));
+    points.push(v.getUint16(o, true) / 10);
+    o += 2;
+  }
+  const nc = v.getUint8(o++);
+  const chars: CharSnap[] = [];
+  const lives: number[] = [];
+  for (let i = 0; i < nc; i++) {
+    lives.push(v.getUint8(o++));
     const state = STATES[v.getUint8(o++)] ?? 'active';
     const daze = v.getUint8(o++) / 2;
     const stamina = v.getUint8(o++) / 2;
@@ -170,6 +194,9 @@ export function decodeSnapshot(data: ArrayBuffer | Uint8Array): Snapshot | null 
     const f = v.getUint8(o++);
     chars.push({ state, daze, stamina, koTimer, exhausted: !!(f & 1), hanging: !!(f & 2), hurt: !!(f & 4), effort: !!(f & 8), scared: !!(f & 16) });
   }
+  const hillIndex = v.getUint8(o++);
+  const potatoHolder = v.getInt8(o++);
+  const potatoTimer = v.getUint8(o++) / 10;
   const nb = v.getUint16(o, true);
   o += 2;
   const bodies = new Float32Array(nb * 7);
@@ -202,5 +229,5 @@ export function decodeSnapshot(data: ArrayBuffer | Uint8Array): Snapshot | null 
   const nk = v.getUint8(o++);
   const breakStates: BreakState[] = [];
   for (let i = 0; i < nk; i++) breakStates.push(BREAKS[v.getUint8(o++)] ?? 'intact');
-  return { epoch, tick, roundTime, phase, round, scores, chars, bodies, propActive, breakStates };
+  return { epoch, tick, roundTime, phase, round, scores, points, lives, hillIndex, potatoHolder, potatoTimer, chars, bodies, propActive, breakStates };
 }

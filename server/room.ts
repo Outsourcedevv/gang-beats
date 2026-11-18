@@ -6,6 +6,8 @@ import type { SimEvent } from '../src/sim/events';
 import { decodeInput, encodeSnapshot, toPlayerInput } from '../src/net/codec';
 import type { MemberInfo, RoomInfo, RoomSettings, ServerMsg, SlotInfo } from '../src/net/protocol';
 import { AUTO_START_SECONDS, MAX_ROOM, SNAPSHOT_EVERY } from '../src/net/protocol';
+import type { ModeId } from '../src/sim/modes';
+import { MAX_TEAMS, MODES, modeDef, randomTeams } from '../src/sim/modes';
 import type { Conn } from './conn';
 
 const FIGHTER_COUNT = 6;
@@ -15,6 +17,7 @@ const RESULTS_TIME = 6;
 
 interface Member {
   conn: Conn;
+  team: number;
   ready: boolean;
   spectating: boolean;
   vote: string | null;
@@ -47,6 +50,8 @@ class Match {
     arena: ArenaDef,
     slots: Slot[],
     rotate: boolean,
+    readonly mode: ModeId,
+    readonly teams: number[],
   ) {
     this.slots = slots;
     const start = ARENAS.indexOf(arena);
@@ -61,6 +66,8 @@ class Match {
       players: this.slots.length,
       seed: (Math.random() * 1e9) | 0,
       resume,
+      mode: this.mode,
+      teams: this.teams,
       nextArena: rotate ? (round) => this.rotation[(round - 1) % this.rotation.length] : undefined,
     });
   }
@@ -143,7 +150,7 @@ class Match {
 /** A lobby (and, while playing, its match). Players stay in the room between matches. */
 export class Room {
   readonly members: Member[] = [];
-  settings: RoomSettings = { bots: 0, mapMode: 'vote' };
+  settings: RoomSettings = { bots: 0, mapMode: 'vote', mode: 'ffa', teamCount: 2, teamsOn: false };
   state: 'lobby' | 'playing' = 'lobby';
   match: Match | null = null;
   private autoStartAt: number | null = null;
@@ -174,11 +181,12 @@ export class Room {
 
   add(conn: Conn): void {
     if (this.has(conn)) return;
-    this.members.push({ conn, ready: false, spectating: this.state === 'playing', vote: null });
+    this.members.push({ conn, team: this.emptiestTeam(), ready: false, spectating: this.state === 'playing', vote: null });
     conn.room = this;
     this.dirty = true;
     if (this.match) {
-      conn.send({ t: 'matchStart', arena: this.match.sim.arena.id, epoch: this.match.epoch, slots: this.match.slotInfo(), you: -1 });
+      const m = this.match;
+      conn.send({ t: 'matchStart', arena: m.sim.arena.id, epoch: m.epoch, slots: m.slotInfo(), you: -1, mode: m.mode, sides: m.sim.rules.sides });
     }
   }
 
@@ -204,6 +212,7 @@ export class Room {
       host: i === 0,
       spectating: m.spectating,
       friendCode: m.conn.friendCode,
+      team: m.team,
     }));
     return {
       code: this.code,
@@ -243,8 +252,38 @@ export class Room {
     this.dirty = true;
   }
 
+  private emptiestTeam(extra: number[] = []): number {
+    const counts = new Array(this.settings.teamCount).fill(0);
+    for (const m of this.members) if (m.team < counts.length) counts[m.team]++;
+    for (const t of extra) if (t < counts.length) counts[t]++;
+    return counts.indexOf(Math.min(...counts));
+  }
+
+  setTeam(conn: Conn, team: number): void {
+    const m = this.members.find((x) => x.conn === conn);
+    if (!m || this.state !== 'lobby' || !Number.isInteger(team)) return;
+    m.team = Math.max(0, Math.min(this.settings.teamCount - 1, team));
+    this.dirty = true;
+  }
+
+  shuffleTeams(conn: Conn): string | null {
+    if (conn.id !== this.hostId) return 'Only the host can shuffle teams.';
+    const t = randomTeams(this.members.length, this.settings.teamCount);
+    this.members.forEach((m, i) => (m.team = t[i]));
+    this.dirty = true;
+    return null;
+  }
+
   applySettings(conn: Conn, s: Partial<RoomSettings>): string | null {
     if (conn.id !== this.hostId) return 'Only the host can change settings.';
+    if (s.mode && MODES.some((m) => m.id === s.mode)) this.settings.mode = s.mode;
+    if (typeof s.teamCount === 'number' && Number.isFinite(s.teamCount)) {
+      this.settings.teamCount = Math.max(2, Math.min(MAX_TEAMS, Math.round(s.teamCount)));
+      for (const m of this.members) if (m.team >= this.settings.teamCount) m.team = this.emptiestTeam();
+    }
+    if (typeof s.teamsOn === 'boolean') this.settings.teamsOn = s.teamsOn;
+    if (this.settings.mode === 'trophy') this.settings.teamCount = 2;
+    for (const m of this.members) if (m.team >= this.settings.teamCount) m.team = m.team % this.settings.teamCount;
     if (typeof s.bots === 'number' && Number.isFinite(s.bots)) this.settings.bots = Math.max(0, Math.min(MAX_ROOM - 1, Math.round(s.bots)));
     if (s.mapMode === 'vote' || s.mapMode === 'rotate') this.settings.mapMode = s.mapMode;
     this.dirty = true;
@@ -295,11 +334,18 @@ export class Room {
       const index = slots.length;
       slots.push({ name: botNames[b % botNames.length], fighter: f, memberId: null, conn: null, bot: new Bot(index, (Math.random() * 1e9) | 0, 0.45 + Math.random() * 0.3), moveX: 0, moveZ: 0, held: 0, latch: 0 });
     }
-    this.match = new Match(this, arena, slots, this.settings.mapMode === 'rotate');
+    // Teams: players keep their pick, bots fill the smallest teams.
+    const def = modeDef(this.settings.mode);
+    let teams: number[] = this.members.map((m) => m.team);
+    while (teams.length < slots.length) teams.push(this.emptiestTeam(teams.slice(this.members.length)));
+    // Optional-team modes play free-for-all unless the host switched teams on.
+    if (def.teams === 'optional' && !this.settings.teamsOn) teams = slots.map((_, i) => i);
+    if (def.teams === true && new Set(teams).size < 2) return 'Team modes need fighters on at least two teams.';
+    this.match = new Match(this, arena, slots, this.settings.mapMode === 'rotate', this.settings.mode, teams);
     this.state = 'playing';
     this.autoStartAt = null;
     this.match.slots.forEach((s, i) => {
-      s.conn?.send({ t: 'matchStart', arena: arena.id, epoch: 0, slots: this.match!.slotInfo(), you: i });
+      s.conn?.send({ t: 'matchStart', arena: arena.id, epoch: 0, slots: this.match!.slotInfo(), you: i, mode: this.settings.mode, sides: this.match!.sim.rules.sides });
     });
     this.dirty = true;
     return null;

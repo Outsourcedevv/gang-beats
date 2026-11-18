@@ -174,3 +174,10 @@ table.bindings { width: 100%; border-collapse: collapse; margin-top: 12px; }
 .toast span { flex: 1; font-weight: bold; }
 .spectate { position: absolute; bottom: 112px; left: 50%; transform: translateX(-50%); background: rgba(42, 29, 58, 0.85); color: #fff; padding: 8px 16px; border-radius: 12px; font-weight: bold; white-space: nowrap; }
 .tag.you { outline: 3px solid #fff; }
+
+.team-btn { background: var(--t); color: #fff; text-shadow: 0 1px 0 rgba(0,0,0,0.4); }
+.team-opts { display: flex; gap: 12px; align-items: center; justify-content: center; flex-wrap: wrap; margin-top: 6px; font-size: 14px; }
+.team-opts span { display: inline-flex; gap: 4px; align-items: center; }
+.error { color: #c0243a; font-weight: bold; text-align: center; margin: 8px 0 0; }
+.scoreboard .round.potato { background: #1d1d24; }
+.mode .map-name { padding: 8px; }

@@ -102,6 +102,16 @@ export const HIGHWAY: ArenaDef = {
     { kind: 'intensify', start: 100, target: 0, scale: 0.6, warn: 'The driver is losing it!' },
     { kind: 'intensify', start: 130, target: 1, scale: 0.6 },
   ],
+  hills: [
+    { pos: { x: 0, y: 0, z: 0.2 }, radius: 1.5 },
+    { pos: { x: -7.55, y: 1.4, z: 0 }, radius: 1.0 },
+    { pos: { x: 4.2, y: 0, z: 0 }, radius: 1.4 },
+  ],
+  goals: [
+    { min: { x: -6.1, y: -0.2, z: -2.2 }, max: { x: -4.8, y: 2.5, z: 2.2 } },
+    { min: { x: 4.8, y: -0.2, z: -2.2 }, max: { x: 6.1, y: 2.5, z: 2.2 } },
+  ],
+  trophySpawn: { x: 0, y: 1.2, z: 0 },
   spawns: [
     { x: -4.2, y: 0, z: -0.6 },
     { x: 4.2, y: 0, z: 0.6 },

@@ -13,6 +13,8 @@ import { clamp, makeRng, normalize, sub, len } from './math';
 import type { Vec3 } from './math';
 import { PART_COUNT, PART_INDEX } from './ragdoll';
 import { RoundRules } from './rules';
+import type { ModeId } from './modes';
+import { sidesFor } from './modes';
 import type { WorldView } from './view';
 import type { BreakState } from './arenaRuntime';
 import type { RulesResume } from './rules';
@@ -61,6 +63,14 @@ export interface SimOptions {
   resume?: RulesResume;
   /** Called when a new round is about to start; return a different arena to switch maps. */
   nextArena?: (round: number) => ArenaDef | null;
+  /** Game mode (default free-for-all) and team per fighter for team modes. */
+  mode?: ModeId;
+  teams?: number[];
+}
+
+/** Golden trophy for Grab the Goods. */
+export function trophyDef(arena: ArenaDef): PropDef {
+  return { id: 'trophy', shape: 'trophy', pos: arena.trophySpawn ?? { x: 0, y: 1.5, z: 0 }, half: { x: 0.24, y: 0.32, z: 0.24 }, mass: 4, color: 0xffc23d };
 }
 
 /** Floats stored per body in a transform snapshot: position (3) + quaternion (4). */
@@ -93,6 +103,9 @@ export class GameSim implements SimContext, ArenaHost, WorldView {
   /** Set when the rules want the next round on another arena; the host rebuilds the sim. */
   pendingArena: { arena: ArenaDef; resume: RulesResume } | null = null;
   readonly nextArena: SimOptions['nextArena'];
+  readonly mode: ModeId;
+  /** Index of the Grab the Goods trophy in `props`, or -1. */
+  trophyIndex = -1;
   /** Bodies in snapshot order: characters' parts, props, movers, breakables. */
   private snapBodies: RigidBody[] = [];
   private moverBase = 0;
@@ -112,6 +125,7 @@ export class GameSim implements SimContext, ArenaHost, WorldView {
     this.killY = opts.arena.killY ?? PHYSICS.killY;
     this.killCause = opts.arena.killCause ?? 'fall';
     this.nextArena = opts.nextArena;
+    this.mode = opts.mode ?? 'ffa';
 
     this.runtime = new ArenaRuntime(this, this.arena);
     this.buildProps();
@@ -136,7 +150,7 @@ export class GameSim implements SimContext, ArenaHost, WorldView {
     this.currSnap = new Float32Array(n * SNAP_STRIDE);
     this.writeSnapshot(this.currSnap);
     this.prevSnap.set(this.currSnap);
-    this.rules = new RoundRules(this, !!opts.sandbox, opts.resume);
+    this.rules = new RoundRules(this, !!opts.sandbox, opts.resume, this.mode, sidesFor(this.mode, opts.players, opts.teams));
   }
 
   registerCollider(c: RAPIER_NS.Collider, owner: Owner): void {
@@ -161,6 +175,10 @@ export class GameSim implements SimContext, ArenaHost, WorldView {
 
   private buildProps(): void {
     const all = [...this.arena.props.map((d) => ({ d, pool: false })), ...(this.arena.dropPool ?? []).map((d) => ({ d, pool: true }))];
+    if (this.mode === 'trophy') {
+      this.trophyIndex = all.length;
+      all.push({ d: trophyDef(this.arena), pool: false });
+    }
     all.forEach(({ d: def, pool }, index) => {
       const body = this.world.createRigidBody(
         RAPIER.RigidBodyDesc.dynamic()
@@ -173,6 +191,7 @@ export class GameSim implements SimContext, ArenaHost, WorldView {
       if (def.shape === 'crate') desc = RAPIER.ColliderDesc.roundCuboid(def.half.x - 0.03, def.half.y - 0.03, def.half.z - 0.03, 0.03);
       else if (def.shape === 'barrel') desc = RAPIER.ColliderDesc.cylinder(def.half.y, def.half.x);
       else if (def.shape === 'ball') desc = RAPIER.ColliderDesc.ball(def.half.x);
+      else if (def.shape === 'trophy') desc = RAPIER.ColliderDesc.cylinder(def.half.y, def.half.x);
       else desc = RAPIER.ColliderDesc.cone(def.half.y, def.half.x);
       const bouncy = def.shape === 'ball';
       desc
@@ -230,6 +249,7 @@ export class GameSim implements SimContext, ArenaHost, WorldView {
 
   emit(ev: SimEvent): void {
     if (ev.type === 'throw' && ev.prop !== undefined) this.creditProp(ev.prop, ev.char);
+    this.rules?.onEvent(ev);
     if (ev.type === 'land') this.runtime?.onLanding(this.characters[ev.char]?.standingOn() ?? null, ev.strength);
     this.events.push(ev);
   }
@@ -392,6 +412,48 @@ export class GameSim implements SimContext, ArenaHost, WorldView {
     p.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
   }
 
+  /** Bring an eliminated fighter back at the spawn point farthest from everyone else. */
+  respawn(i: number): void {
+    const c = this.characters[i];
+    if (!c) return;
+    let best = this.arena.spawns[i % this.arena.spawns.length];
+    let bestD = -1;
+    for (const s of this.arena.spawns) {
+      let d = Infinity;
+      for (const o of this.characters) {
+        if (o === c || !o.alive) continue;
+        const p = o.torsoPos;
+        d = Math.min(d, Math.hypot(p.x - s.x, p.z - s.z));
+      }
+      if (d > bestD) {
+        bestD = d;
+        best = s;
+      }
+    }
+    c.reset(this.world, { x: best.x, y: best.y + 0.02, z: best.z }, Math.atan2(-best.x, -best.z));
+    this.emit({ type: 'respawn', char: i });
+  }
+
+  /** Hot Potato: the bomb goes off on fighter i. */
+  explode(i: number): void {
+    const c = this.characters[i];
+    if (!c || !c.alive) return;
+    const at = c.torsoPos;
+    const pos = { x: at.x, y: at.y, z: at.z };
+    for (const o of this.characters) {
+      if (o === c || !o.alive) continue;
+      const d = sub(o.torsoPos, pos);
+      const l = len(d);
+      if (l > 3) continue;
+      const k = (1 - l / 3) * 9;
+      const dir = normalize({ x: d.x, y: 0.6, z: d.z });
+      for (const p of o.rag.parts) p.body.applyImpulse({ x: dir.x * k * p.def.mass, y: dir.y * k * p.def.mass, z: dir.z * k * p.def.mass }, true);
+      o.stun(1.2);
+    }
+    this.emit({ type: 'explode', char: i, pos });
+    c.eliminate(this, 'potato');
+  }
+
   /** Put every character and prop back at the start positions. */
   resetRound(): void {
     for (const c of this.characters) c.releaseAll(this);
@@ -452,7 +514,12 @@ export class GameSim implements SimContext, ArenaHost, WorldView {
     return (this.breakableBase + i) * SNAP_STRIDE;
   }
 
+  private disposed = false;
+
+  /** Free the WASM physics world (safe to call more than once). */
   dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
     this.eventQueue.free();
     this.world.free();
   }

@@ -223,3 +223,39 @@ describe('multiplayer server', () => {
     k.close();
   });
 });
+
+describe('multiplayer modes', () => {
+  it('host picks a team mode, players pick teams, the match starts with those sides', async () => {
+    const a = await new Client('Ann').open();
+    const b = await new Client('Ben').open();
+    a.send({ t: 'create', private: true });
+    await a.until(() => !!a.room);
+    b.send({ t: 'join', code: a.room!.code });
+    await a.until(() => a.room?.members.length === 2);
+    a.send({ t: 'settings', settings: { mode: 'teams', teamCount: 2 } });
+    await a.until(() => a.room?.settings.mode === 'teams');
+    // Both on the same team: refused.
+    const annTeam = a.room!.members[0].team;
+    const benTeam = a.room!.members[1].team;
+    if (annTeam !== benTeam) b.send({ t: 'team', team: annTeam });
+    await a.until(() => a.room!.members[1].team === annTeam);
+    a.send({ t: 'start' });
+    await a.until(() => !!a.last('error'));
+    expect(a.last('error')!.message).toMatch(/two teams/);
+    // Random teams always gives two teams of one.
+    a.send({ t: 'randomTeams' });
+    await a.until(() => a.room!.members[0].team !== a.room!.members[1].team);
+    a.send({ t: 'settings', settings: { bots: 2 } });
+    a.send({ t: 'start' });
+    await a.until(() => !!a.last('matchStart'));
+    const ms = a.last('matchStart')!;
+    expect(ms.mode).toBe('teams');
+    expect(ms.sides.length).toBe(4);
+    expect(new Set(ms.sides).size).toBe(2);
+    expect(ms.sides.filter((x) => x === ms.sides[0]).length).toBe(2); // bots balanced the teams
+    await a.until(() => a.snaps.length > 2);
+    expect(a.snaps.at(-1)!.scores.length).toBe(2);
+    a.close();
+    b.close();
+  }, 20000);
+});

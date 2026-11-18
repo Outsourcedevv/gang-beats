@@ -138,6 +138,26 @@ function propMesh(def: PropDef): THREE.Object3D {
     const hex = '#' + def.color.toString(16).padStart(6, '0');
     const t = stripeTexture(hex, '#ffe14a', 6);
     mesh = new THREE.Mesh(new THREE.SphereGeometry(def.half.x, 24, 16), new THREE.MeshPhysicalMaterial({ color: 0xffffff, map: t, roughness: 0.35, clearcoat: 0.6 }));
+  } else if (def.shape === 'trophy') {
+    const gold = new THREE.MeshStandardMaterial({ color: 0xffc23d, metalness: 0.85, roughness: 0.25, emissive: 0x5a3a00, emissiveIntensity: 0.4 });
+    const g = new THREE.Group();
+    const cup = new THREE.Mesh(new THREE.CylinderGeometry(def.half.x, def.half.x * 0.55, def.half.y * 1.1, 20, 1, true), gold);
+    cup.position.y = def.half.y * 0.35;
+    const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.07, def.half.y * 0.7, 12), gold);
+    stem.position.y = -def.half.y * 0.45;
+    const base = new THREE.Mesh(new THREE.CylinderGeometry(def.half.x * 0.8, def.half.x * 0.9, 0.08, 20), gold);
+    base.position.y = -def.half.y + 0.04;
+    for (const s of [1, -1]) {
+      const handle = new THREE.Mesh(new THREE.TorusGeometry(0.09, 0.025, 8, 16), gold);
+      handle.position.set(s * def.half.x, def.half.y * 0.4, 0);
+      handle.rotation.y = Math.PI / 2;
+      g.add(handle);
+    }
+    g.add(cup, stem, base);
+    g.traverse((o) => {
+      if (o instanceof THREE.Mesh) o.castShadow = true;
+    });
+    return g;
   } else {
     const t = stripeTexture('#ff6a1a', '#ffffff', 5);
     mesh = new THREE.Mesh(new THREE.ConeGeometry(def.half.x, def.half.y * 2, 20), new THREE.MeshStandardMaterial({ color: 0xffffff, map: t, roughness: 0.6 }));
@@ -213,6 +233,7 @@ export class ArenaView {
   private breakables: THREE.Mesh[] = [];
   private props: THREE.Object3D[] = [];
   private belts: { tex: THREE.Texture; speed: number; tile: number }[] = [];
+  private baseProps = 0;
   private time = 0;
 
   constructor(
@@ -252,6 +273,7 @@ export class ArenaView {
       this.group.add(m);
       this.props.push(m);
     }
+    this.baseProps = this.props.length;
     if (arena.theme === 'sunset-rooftop') rooftopDecor(this.group);
     scene.add(this.group);
   }
@@ -278,6 +300,16 @@ export class ArenaView {
       m.visible = world.propActive(i);
       if (m.visible) applySnap(m, prev, curr, world.propOffset(i), alpha);
     });
+  }
+
+  /** Mode-specific props appended after the arena's own (e.g. the Grab the Goods trophy). */
+  setExtraProps(defs: PropDef[]): void {
+    for (const m of this.props.splice(this.baseProps)) this.group.remove(m);
+    for (const d of defs) {
+      const m = propMesh(d);
+      this.group.add(m);
+      this.props.push(m);
+    }
   }
 
   dispose(scene: THREE.Scene): void {

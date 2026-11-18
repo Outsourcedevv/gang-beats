@@ -3,7 +3,7 @@
 Status key: ✅ done and tested · 🟡 partial / basic version · ⬜ not started
 
 How things were verified: `npm test` runs the real simulation headlessly
-(49 tests, including multiplayer-server tests with real WebSocket clients); the browser build was driven with headless Chromium via Playwright
+(63 tests, including multiplayer-server tests with real WebSocket clients); the browser build was driven with headless Chromium via Playwright
 (setup → match → punching, grabbing, lifting, throwing, pause, rebinding,
 settings persistence) with no console errors; `tests/e2e/online.e2e.cjs` runs
 three separate browser clients against the real server and passes. Feel/tuning still needs
@@ -76,7 +76,7 @@ Bot-vs-bot runs (4 bots, aggressive): Tar Top rounds ~25–110 s, Grinder Works
 ~20–200 s, Rush Hour ~15–30 s (narrow deck, very chaotic), Wobbleland ~13–90 s.
 Physics ≈ 0.7–1.2 ms per step with 8 fighters.
 
-## Stage 4 — Online multiplayer ✅ (current)
+## Stage 4 — Online multiplayer ✅
 
 | Feature | Status | Notes |
 | --- | --- | --- |
@@ -96,13 +96,25 @@ Physics ≈ 0.7–1.2 ms per step with 8 fighters.
 | Eliminated players spectate | ✅ | Grey screen + "spectating" banner; stay in the room; late joiners watch until the next match |
 | Stay in the lobby between matches | ✅ | Rounds continue within a match; afterwards everyone returns to the lobby |
 | Verified with separate browser clients | ✅ | 3 Playwright browser contexts: join by code, friend invite, votes, start, movement seen identically by the others, a punch registering on the victim's client, spectator mode, leaver → bot |
-| Team selection / random teams | ⬜ | Arrives with team modes in Stage 5 (no point picking teams before there are team modes) |
+| Team selection / random teams | ✅ | Added in Stage 5: per-player team badge in the lobby, host Random teams, bots balance teams |
 
 Server cost: ~1 ms of physics per tick for an 8-fighter room, so one server
 process can host roughly 10 busy rooms.
 
-## Stage 5 — Game modes
-🟡 Last player standing / free-for-all exists. ⬜ Team battles (2v2, 3v3), king of the hill, team objectives, mode selection.
+## Stage 5 — Game modes ✅ (current)
+
+| Mode | Status | Notes |
+| --- | --- | --- |
+| Free-for-all | ✅ | Last fighter standing |
+| Last player standing | ✅ | 3 lives, 2.5 s respawn at the safest spawn point; teams optional |
+| Team battles | ✅ | 2–4 teams (2v2, 3v3, 4v4…), team rings under fighters, team-coloured cards/scoreboard, friendly fire on |
+| King of the hill | ✅ | Per-map hill zones (moves every 25 s), solo/one-team control scores, contested scores nothing, first to 20; teams optional |
+| Team objectives | ✅ | Grab the Goods: golden trophy, per-map goals, first to 3 goals |
+| Additional party modes | ✅ | Hot Potato. Modes are data + rules hooks (`src/sim/modes.ts`, `rules.ts`), so new ones slot in easily |
+| Team selection + random teams | ✅ | Local setup (per-slot team button, team count, Random teams) and online lobby |
+| First to three round wins | ✅ | Scores per side; round/match banners name the team or fighter; time limit decides point modes |
+| Bots understand every mode | ✅ | Don't target teammates, take the hill, fetch/carry/chase the trophy, pass or flee the bomb |
+| Works online | ✅ | Mode, teams, lives, points, hill and bomb state are in the protocol and snapshots |
 
 ## Stage 6 — Menus & progression
 ⬜ Main menu (Play / Customise / Settings / Statistics / Friends), XP, levels, ranks, coins, unlockable outfits/characters/emotes/victory animations (local storage first, structured for cloud saves).

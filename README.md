@@ -59,6 +59,25 @@ uses `wss://` automatically on HTTPS pages) and share the room's invite link.
 - **In a match:** the server simulates everything (positions, physics, hits, knockouts, eliminations, rounds); clients send inputs and render interpolated snapshots ~120 ms behind. Knocked out of the round? Your screen goes grey and you spectate. Leave mid-match and a bot takes over your fighter; players who join mid-match watch until the next one. After the match winner is crowned everyone returns to the lobby.
 - Your online identity, name, fighter and friends list are stored in this browser only.
 
+## Game modes
+
+Every mode is played in rounds; the first player (or team) to win three rounds
+takes the match.
+
+| Mode | How a round is won |
+| --- | --- |
+| **Free-for-all** | Last fighter standing |
+| **Team battle** | Last team with anyone standing (2–4 teams, e.g. 2v2, 3v3, 4v4) |
+| **Last player standing** | Three lives each, respawning in between; last one with lives left (teams optional) |
+| **King of the hill** | Hold the glowing zone on your own (or with only your team) for 20 s; the hill moves every 25 s (teams optional) |
+| **Grab the Goods** (team objective) | Carry or throw the golden trophy into your team's goal three times |
+| **Hot Potato** (party mode) | Someone holds a ticking bomb — hit someone to pass it. Whoever holds it when it goes off is out |
+
+Teams are picked per fighter on the local setup screen or in the online lobby
+(click your team badge), or shuffled with **Random teams**. Friendly fire is on.
+Rounds that hit the 4-minute limit go to whoever leads on points (hill/trophy
+modes) or end in a draw.
+
 ## Maps
 
 | Map | Setting | Hazards |
@@ -117,7 +136,8 @@ src/
     arena.ts      Arena data types (pieces, movers, breakables, hazards, events)
     arenas/       The four maps as plain data
     arenaRuntime.ts  Moving machinery, breakables, hazard zones, timed events
-    rules.ts      Last-player-standing rounds, first to 3, time limit, map rotation
+    modes.ts      Mode definitions, teams/sides helpers
+    rules.ts      Round rules for every mode (sides, lives, hill, trophy, potato), first to 3, time limit, map rotation
     bot.ts        AI that produces the same inputs a player would
     config.ts     All tuning numbers
   net/      Wire protocol + binary input/snapshot codecs (shared by client and server)

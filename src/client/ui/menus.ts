@@ -13,7 +13,7 @@ import { ARENAS } from '../../sim/arenas';
 import { MODES } from '../../sim/modes';
 import { GAME_TITLE } from './title';
 
-export type MetaScreen = 'menu' | 'customise' | 'settings' | 'stats' | 'friends' | 'results';
+export type MetaScreen = 'menu' | 'customise' | 'settings' | 'stats' | 'friends' | 'results' | 'howto';
 
 export interface MetaHooks {
   play(): void;
@@ -21,6 +21,8 @@ export interface MetaHooks {
   friendsPanel(): HTMLElement;
   activateOnline(): void;
   show(screen: MetaScreen): void;
+  /** Key labels for an action on the WASD keyboard scheme, e.g. "J/F". */
+  keys(action: string): string;
 }
 
 const hex = (n: number) => '#' + n.toString(16).padStart(6, '0');
@@ -64,6 +66,7 @@ export class MetaUI {
       stats: mk('stats-screen'),
       friends: mk('friends-screen'),
       results: mk('results'),
+      howto: mk('howto-screen'),
     };
     profiles.onChange(() => {
       if (!this.screens.menu.classList.contains('hidden')) this.renderMenu();
@@ -82,6 +85,8 @@ export class MetaUI {
         return this.renderStats();
       case 'friends':
         return this.renderFriends();
+      case 'howto':
+        return this.renderHowTo();
       case 'results':
         return;
     }
@@ -136,12 +141,78 @@ export class MetaUI {
           'div',
           { class: 'menu-items' },
           item('Play', 'Local or online brawls', () => this.hooks.play(), 'menu-play', true),
+          item('How to play', 'Moves, modes and maps', () => this.hooks.show('howto'), 'menu-howto'),
           item('Customise', 'Characters, outfits, emotes', () => this.hooks.show('customise'), 'menu-customise'),
           item('Settings', 'Audio, controls, graphics', () => this.hooks.show('settings'), 'menu-settings'),
           item('Statistics', 'Your record', () => this.hooks.show('stats'), 'menu-stats'),
           item('Friends', 'Friend codes and invites', () => this.hooks.show('friends'), 'menu-friends'),
         ),
         h('p', { class: 'note' }, 'Progress, coins and unlocks are saved in this browser only.'),
+      ),
+    );
+  }
+
+  // ------------------------------------------------------------------ how to
+  private renderHowTo(): void {
+    const k = (a: string) => h('kbd', {}, this.hooks.keys(a));
+    const firstRun = !this.settings.tutorialSeen;
+    const card = (icon: string, title: string, ...body: (string | HTMLElement)[]) =>
+      h('div', { class: 'howto-card' }, h('div', { class: 'howto-icon' }, icon), h('div', {}, h('h3', {}, title), h('p', {}, ...body)));
+    const done = () => {
+      this.settings.tutorialSeen = true;
+      saveSettings(this.settings);
+    };
+    this.screens.howto.replaceChildren(
+      h(
+        'div',
+        { class: 'panel howto-panel' },
+        firstRun ? null : this.back(),
+        h('h2', {}, firstRun ? `Welcome to ${GAME_TITLE}!` : 'How to play'),
+        h('p', { class: 'note' }, 'Wobbly fighters, real physics. Knock everyone else off the map — or out cold and then off the map.'),
+        h(
+          'div',
+          { class: 'howto-grid' },
+          card('🕹️', 'Move', 'Walk with ', k('up'), k('left'), k('down'), k('right'), ', hold ', k('sprint'), ' to sprint and ', k('jump'), ' to jump. Sprinting and specials use stamina — run dry and you get tired and slow.'),
+          card('👊', 'Strike', 'Punch ', k('punch'), ' (or left mouse), kick ', k('kick'), ', headbutt ', k('headbutt'), ' and dive-tackle ', k('dive'), '. Hits to the head daze — enough of them and the target is knocked out for a few seconds.'),
+          card('✋', 'Grab & throw', 'Hold ', k('grab'), ' (or right mouse) to grab whatever your hands touch. Hold ', k('lift'), ' to lift, then let go of grab to throw. Knocked-out fighters are much easier to carry.'),
+          card('🧗', 'Hang & climb', 'Grab a ledge or railing to hang on. Press ', k('jump'), ' while hanging to climb back up. Mash your buttons when someone holds you to struggle free.'),
+          card('🏆', 'Win', 'Rounds end when one fighter (or team) is left. First to win 3 rounds takes the match. Eliminated players spectate in grey until the next round.'),
+          card('🎉', 'Show off', 'Press ', k('emote'), ' to emote. Matches earn XP and coins: level up to unlock and buy characters, outfits, hats, emotes and victory dances.'),
+        ),
+        h('h3', { class: 'howto-sub' }, 'Modes'),
+        h('div', { class: 'howto-list' }, ...MODES.map((m) => h('div', {}, h('b', {}, m.name), ' — ', m.blurb))),
+        h('h3', { class: 'howto-sub' }, 'Maps'),
+        h('div', { class: 'howto-list' }, ...ARENAS.map((a) => h('div', {}, h('b', {}, a.name), ' — ', a.blurb))),
+        h('p', { class: 'note' }, 'Gamepads work too: A jump, X punch, B kick, Y headbutt, RT grab, LT lift, RB dive, LB sprint, Back emote. Press H in a match for a key reminder, Esc to pause.'),
+        h(
+          'div',
+          { class: 'row' },
+          h(
+            'button',
+            {
+              class: 'btn primary',
+              id: 'howto-play',
+              onclick: () => {
+                this.sfx.click();
+                done();
+                this.hooks.play();
+              },
+            },
+            firstRun ? "Got it — let's play!" : 'Play',
+          ),
+          h(
+            'button',
+            {
+              class: 'btn',
+              onclick: () => {
+                this.sfx.click();
+                done();
+                this.hooks.controls();
+              },
+            },
+            'Change keys',
+          ),
+        ),
       ),
     );
   }

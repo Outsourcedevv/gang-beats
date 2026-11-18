@@ -116,7 +116,7 @@ process can host roughly 10 busy rooms.
 | Bots understand every mode | ✅ | Don't target teammates, take the hill, fetch/carry/chase the trophy, pass or flee the bomb |
 | Works online | ✅ | Mode, teams, lives, points, hill and bomb state are in the protocol and snapshots |
 
-## Stage 6 — Menus & progression ✅ (current)
+## Stage 6 — Menus & progression ✅
 
 | Feature | Status | Notes |
 | --- | --- | --- |
@@ -135,8 +135,20 @@ process can host roughly 10 busy rooms.
 | Browser-local persistence | ✅ | `wobbleweights.profile.v1` + settings in localStorage, sanitised on load; `ProfileStore` interface ready for cloud saves. Not synced across devices |
 | Cosmetics online | ✅ | Loadouts sent to the server (sanitised), shown in lobbies, drive emotes/victories in the authoritative sim |
 
-## Stage 7 — Polish
-⬜ Music per map, more FX, LOD/perf passes, accessibility, UX polish.
+## Stage 7 — Polish ✅ (current)
+
+| Feature | Status | Notes |
+| --- | --- | --- |
+| Music per map | ✅ | Procedural WebAudio tracks for the menu and each theme (no audio files), plus per-map ambience |
+| Audio mix | ✅ | Master / effects / music buses with their own volume sliders and a compressor |
+| Graphics quality | ✅ | Auto / high / medium / low (pixel ratio, shadows); auto steps down when frame rate stays under 40 fps |
+| Visual polish | ✅ | Per-map sky, fog and lighting rigs, pooled particles (dust, sparks, splinters, splashes, shards), soft vignette, squash-and-stretch faces and expressions |
+| Accessibility | ✅ | Camera-shake toggle, full key remapping, mouse + gamepad support, hold-to-punch option, layouts that fit narrow windows |
+| First-run guide | ✅ | "How to play" screen (moves with your current keys, modes, maps) is shown before the first match and stays in the main menu; in-match key reminder on H |
+| Loading screen | ✅ | Branded loading screen that fades out; clear error if WebGL/WebAssembly are unavailable |
+| Performance | ✅ | Pooled FX, inactive props hidden, idle physics bodies sleep, rendering stops when the tab is hidden; ~1 ms physics per step with 8 fighters, snapshots under 2 KB |
+| Tab hidden | ✅ | Local matches pause automatically and audio is suspended; online matches carry on server-side |
+| Final verification | ✅ | 74 headless tests (sim, combat, arenas, modes, codec, progression, emotes, real WebSocket server), production build, 3-browser online E2E |
 
 ## Known issues / limitations
 - Online play has no client-side prediction: on high-latency connections your own fighter responds RTT/2 + ~120 ms (interpolation) late.

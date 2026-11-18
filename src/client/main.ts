@@ -33,13 +33,18 @@ async function boot(): Promise<void> {
   const game = new Game(app, input, sfx);
   const profiles = new ProfileService();
   new UI(game, input, sfx, settings, profiles);
-  document.getElementById('loading')?.remove();
+  const loading = document.getElementById('loading');
+  loading?.classList.add('done');
+  setTimeout(() => loading?.remove(), 500);
   // Exposed for automated browser tests / debugging only.
   (window as unknown as { __game: Game }).__game = game;
 }
 
 boot().catch((err) => {
   console.error(err);
-  const el = document.getElementById('loading');
-  if (el) el.textContent = 'Failed to start: ' + (err instanceof Error ? err.message : String(err));
+  const el = document.querySelector('#loading .load-msg');
+  if (el) {
+    el.className = 'load-error';
+    el.textContent = 'Failed to start: ' + (err instanceof Error ? err.message : String(err)) + ' — this game needs WebGL and WebAssembly.';
+  }
 });

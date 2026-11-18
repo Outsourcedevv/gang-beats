@@ -124,7 +124,9 @@ export class UI {
       },
     }, this.root, profiles);
     this.meta = new MetaUI(this.root, game, profiles, settings, sfx, {
-      play: () => this.show('setup'),
+      // First time: show the guide before the setup screen.
+      play: () => this.show(this.settings.tutorialSeen ? 'setup' : 'howto'),
+      keys: (a) => (this.input.bindings.kbA[a as Action] ?? []).map(keyLabel).join('/'),
       controls: () => {
         this.controlsReturn = 'settings';
         this.show('controls');
@@ -140,6 +142,11 @@ export class UI {
     };
     game.listener = { onEvent: (ev) => this.onEvent(ev) };
     input.onPause = () => this.togglePause();
+    // Leaving the tab: pause local matches and silence the audio. Online matches keep running on the server.
+    document.addEventListener('visibilitychange', () => {
+      this.sfx.setSuspended(document.hidden);
+      if (document.hidden && this.game.running && !this.game.online && !this.game.paused && this.screen === 'hud') this.togglePause();
+    });
     window.addEventListener('keydown', (e) => {
       if (e.code === 'KeyH' && this.game.running && !this.input.captureNext) this.helpEl.classList.toggle('hidden');
       if (e.code === 'F3') {

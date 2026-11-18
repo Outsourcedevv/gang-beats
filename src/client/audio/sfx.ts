@@ -47,6 +47,16 @@ export class Sfx {
     }
   }
 
+  private suspended = false;
+
+  /** Silence everything while the tab is hidden (the audio clock stops too, so music resumes in place). */
+  setSuspended(hidden: boolean): void {
+    this.suspended = hidden;
+    if (!this.ctx) return;
+    if (hidden) void this.ctx.suspend();
+    else void this.ctx.resume();
+  }
+
   setSfxVolume(v: number): void {
     this.sfxVolume = v;
     if (this.sfxBus) this.sfxBus.gain.value = v;
@@ -399,6 +409,7 @@ export class Sfx {
         this.loopTone('sawtooth', 48, 0.05);
         this.loopNoise('lowpass', 300, 0.03);
         this.ambienceTimer = setInterval(() => {
+          if (this.suspended) return;
           if (Math.random() < 0.5) this.tone('square', 220 + Math.random() * 80, 120, 0.15, 0.03);
           else this.noise(0.12, 'bandpass', 2200, 1400, 0.05, 3);
         }, 1700);

@@ -7,7 +7,7 @@ three rounds wins the match.
 
 > The repository is called `gang-beats`; the game itself is **Wobble Weights**,
 > with its own characters and art. The name lives in `GAME_TITLE`
-> (`src/client/ui/ui.ts`) and the `<title>` in `index.html`.
+> (`src/client/ui/title.ts`), the `<title>` and the loading screen in `index.html`.
 
 ## Running it
 
@@ -61,8 +61,10 @@ uses `wss://` automatically on HTTPS pages) and share the room's invite link.
 
 ## Menus, customisation and progression
 
-The game opens on the **main menu**: Play (local / online), Customise,
-Settings, Statistics and Friends.
+The game opens on the **main menu**: Play (local / online), How to play,
+Customise, Settings, Statistics and Friends. The first time you press Play the
+**How to play** guide appears (moves shown with your current keys, every mode
+and map); after that it stays available from the menu.
 
 - **Customise:** 10 characters, 16 colours (body, trousers, hat), 13 hats,
   7 outfits, 8 extras, 6 emotes and 5 victory animations, previewed live on a
@@ -76,8 +78,10 @@ Settings, Statistics and Friends.
   kicks, headbutts, dives, throws, climbs, time played, wins per mode,
   favourite map.
 - **Settings:** master / effects / music volume, hold-to-punch, mouse
-  controls, camera shake, graphics quality (auto/high/medium/low), key
-  remapping, progress reset.
+  controls, camera shake, graphics quality (auto/high/medium/low — auto drops
+  a level if the frame rate stays low), key remapping, progress reset.
+- Switching to another tab pauses a local match and mutes the audio; online
+  matches keep running on the server.
 - Profile and settings are saved in this browser only (not synced between
   devices); `src/client/profile.ts` has a `ProfileStore` interface where a
   cloud save can plug in.

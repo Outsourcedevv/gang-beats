@@ -30,6 +30,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') errors.push(`${name}: ${m.text()}`); });
     await page.goto(URL, { waitUntil: 'networkidle' }); page.setDefaultTimeout(60000);
     await page.click('#menu-play');
+    // A fresh browser profile sees the first-run guide first.
+    await page.click('#howto-play');
     await page.click('#tab-online');
     await page.waitForSelector('#quick-play', { timeout: 60000 });
     await page.fill('input[aria-label="Your name"]', name);

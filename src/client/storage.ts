@@ -28,6 +28,8 @@ export interface Settings {
   musicVolume?: number;
   cameraShake?: boolean;
   quality?: 'auto' | 'high' | 'medium' | 'low';
+  /** The first-run "How to play" guide has been shown. */
+  tutorialSeen?: boolean;
   /** Online identity (random, local to this browser). */
   playerId?: string;
   playerName?: string;

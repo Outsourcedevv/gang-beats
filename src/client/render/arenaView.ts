@@ -87,6 +87,13 @@ function propMesh(def: PropDef): THREE.Object3D {
       new THREE.CylinderGeometry(def.half.x, def.half.x, def.half.y * 2, 22),
       new THREE.MeshStandardMaterial({ color: 0xffffff, map: t, roughness: 0.5, metalness: 0.4 }),
     );
+  } else if (def.shape === 'ball') {
+    const t = stripeTexture('#ff4f6d', '#ffe14a', 6);
+    t.rotation = Math.PI / 2;
+    mesh = new THREE.Mesh(
+      new THREE.SphereGeometry(def.half.x, 24, 16),
+      new THREE.MeshPhysicalMaterial({ color: 0xffffff, map: t, roughness: 0.35, clearcoat: 0.6 }),
+    );
   } else {
     const t = stripeTexture('#ff6a1a', '#ffffff', 5);
     mesh = new THREE.Mesh(

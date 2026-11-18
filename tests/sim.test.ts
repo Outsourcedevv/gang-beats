@@ -176,6 +176,10 @@ describe('character physics', () => {
           inp.punch = rnd() < 0.5;
           inp.grab = rnd() < 0.3;
           inp.lift = rnd() < 0.2;
+          inp.kick = rnd() < 0.2;
+          inp.headbutt = rnd() < 0.1;
+          inp.dive = rnd() < 0.08;
+          inp.sprint = rnd() < 0.4;
         }
       }
       sim.step(inputs);

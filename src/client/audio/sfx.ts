@@ -124,6 +124,34 @@ export class Sfx {
     o.stop(t + dur + 0.05);
   }
 
+  kick(): void {
+    if (!this.ctx || !this.throttle('kick', 60)) return;
+    this.noise(0.16, 'bandpass', 380, 1500, 0.24, 1.2);
+  }
+
+  headbutt(): void {
+    if (!this.ctx || !this.throttle('headbutt', 60)) return;
+    this.noise(0.1, 'bandpass', 500, 1200, 0.16, 1.5);
+  }
+
+  dive(): void {
+    if (!this.ctx) return;
+    this.noise(0.38, 'bandpass', 300, 1600, 0.3, 1);
+  }
+
+  /** Heavy breathing when a fighter runs out of stamina. */
+  pant(voice: number): void {
+    if (!this.ctx || !this.throttle(`pant${voice}`, 1200)) return;
+    for (let i = 0; i < 3; i++) this.noise(0.16, 'bandpass', 900 * voice, 700 * voice, 0.12, 2, i * 0.3);
+  }
+
+  clunk(strength: number): void {
+    if (!this.ctx || !this.throttle('clunk', 40)) return;
+    const s = Math.min(1, strength / 12);
+    this.tone('square', 180 + Math.random() * 60, 90, 0.12, 0.08 + s * 0.1);
+    this.noise(0.08, 'bandpass', 1200, 400, 0.2 + s * 0.2, 1.4);
+  }
+
   thud(strength: number): void {
     if (!this.ctx || !this.throttle('thud', 50)) return;
     const s = Math.min(1, strength / 12);

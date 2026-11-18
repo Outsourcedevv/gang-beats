@@ -1,6 +1,6 @@
 import type RAPIER_NS from '@dimforge/rapier3d-compat';
 import { RAPIER, characterGroups } from './physics';
-import { BODY, COMBAT, GRAB, MOVE, PHYSICS } from './config';
+import { BODY, CLIMB, COMBAT, DIVE, GRAB, HEADBUTT, KICK, MOVE, PHYSICS, STAMINA } from './config';
 import type { PlayerInput } from './input';
 import { emptyInput, copyInput } from './input';
 import type { Quat, Vec3 } from './math';
@@ -22,6 +22,7 @@ import {
   yawDir,
 } from './math';
 import type { PartName, Ragdoll, RagdollPart } from './ragdoll';
+import { PART_COUNT } from './ragdoll';
 import {
   HAND_TIP_LOCAL,
   LOWER_MASS,
@@ -32,7 +33,7 @@ import {
   createRagdoll,
   resetRagdoll,
 } from './ragdoll';
-import type { SimEvent } from './events';
+import type { AttackKind, SimEvent } from './events';
 
 type World = RAPIER_NS.World;
 type RigidBody = RAPIER_NS.RigidBody;
@@ -61,6 +62,26 @@ export interface SimContext {
 }
 
 type PunchPhase = 'idle' | 'windup' | 'strike' | 'recover';
+type Pressable = 'jump' | 'punch' | 'grab' | 'lift' | 'kick' | 'headbutt' | 'dive';
+
+/** A whole-body move (only one at a time): kick, headbutt or dive tackle. */
+export interface BodyMove {
+  kind: 'kick' | 'headbutt' | 'dive';
+  phase: 'windup' | 'strike' | 'recover';
+  t: number;
+  /** Kicking leg: 0 = left, 1 = right. */
+  leg: number;
+  dir: Vec3;
+  aim: Vec3 | null;
+  hits: number[];
+}
+
+/** What the sim needs to resolve a strike from one body part. */
+export interface Strike {
+  kind: AttackKind;
+  dir: Vec3;
+  hits: number[];
+}
 
 export interface Arm {
   side: 'L' | 'R';
@@ -69,7 +90,8 @@ export interface Arm {
   hand: RagdollPart;
   punch: PunchPhase;
   punchT: number;
-  punchHit: boolean;
+  /** Victims already struck by the current punch (char index, or 100 + prop index). */
+  punchHits: number[];
   aim: Vec3 | null;
   /** Direction of the current strike (world), fixed when the strike starts. */
   strikeDir: Vec3;
@@ -132,6 +154,22 @@ export class Character {
   escape = 0;
   /** Effort flag for facial expressions (punching / lifting / straining). */
   effort = 0;
+  stamina: number = STAMINA.max;
+  /** Ran out of stamina: no sprinting/special moves until partly refilled. */
+  exhausted = false;
+  private staminaDelay = 0;
+  /** Current kick / headbutt / dive, if any. */
+  move: BodyMove | null = null;
+  private nextKickLeg = 1;
+  private airDiveUsed = false;
+  /** True while pushing up off the floor after a fall or knockout. */
+  gettingUp = false;
+  /** Mantle in progress (see climb()). */
+  private climbing: { dir: Vec3; ledgeY: number; t: number } | null = null;
+  /** Velocity of whatever we're standing on (moving platforms, vehicles). */
+  private groundVel: Vec3 = { x: 0, y: 0, z: 0 };
+  /** Pre-step velocity of every body part (strike strength). */
+  readonly partVelPre: Vec3[] = Array.from({ length: PART_COUNT }, () => ({ x: 0, y: 0, z: 0 }));
   readonly input: PlayerInput = emptyInput();
   private prev: PlayerInput = emptyInput();
   private nextPunch = 0;
@@ -157,7 +195,7 @@ export class Character {
       hand: this.part(side === 'L' ? 'handL' : 'handR'),
       punch: 'idle',
       punchT: 0,
-      punchHit: false,
+      punchHits: [],
       aim: null,
       strikeDir: { x: 0, y: 0, z: 1 },
       joint: null,
@@ -199,7 +237,7 @@ export class Character {
     const inp = this.input;
     const prev = this.prev;
     const active = this.state === 'active';
-    const pressed = (k: 'jump' | 'punch' | 'grab' | 'lift') => inp[k] && !prev[k];
+    const pressed = (k: Pressable) => inp[k] && !prev[k];
 
     this.updateBalance(ctx, dt, pressed);
     this.updateStruggle(ctx, dt, pressed);
@@ -228,10 +266,11 @@ export class Character {
     if (this.grounded) this.airTime = 0;
     else this.airTime += dt;
 
-    if (this.groundHit && this.hoverOff <= 0 && control > 0.02) {
+    const diving = this.move?.kind === 'dive' && this.move.phase !== 'recover';
+    if (this.groundHit && this.hoverOff <= 0 && control > 0.02 && !diving) {
       const err = BODY.hoverHeight - this.groundDist;
       const reachFade = clamp((BODY.hoverReach - this.groundDist) / (BODY.hoverReach - BODY.hoverHeight), 0, 1);
-      let acc = err * BODY.hoverStiffness - pv.y * BODY.hoverDamping;
+      let acc = err * BODY.hoverStiffness - (pv.y - this.groundVel.y) * BODY.hoverDamping;
       acc += (G + this.extraLoad / TOTAL_MASS) * reachFade;
       acc = clamp(acc, 0, G * 3.2) * control;
       const f = TOTAL_MASS * acc * dt;
@@ -244,15 +283,19 @@ export class Character {
     this.extraLoad = 0;
 
     // ---- locomotion ----------------------------------------------------
-    if (active) {
+    const moving = ml > 0.1;
+    const sprinting = active && inp.sprint && moving && this.grounded && !this.exhausted && this.stamina > 0;
+    if (sprinting) this.drain(STAMINA.sprintPerSec * dt);
+    if (active && !diving) {
       const dazeSlow = 1 - clamp(this.daze / COMBAT.koThreshold, 0, 1) * 0.35;
-      const sprint = inp.sprint && this.grounded ? MOVE.sprintMul : 1;
-      const speed = MOVE.walkSpeed * dazeSlow * sprint * (this.liftAmount > 0.3 && this.holdingDynamic() ? 0.7 : 1);
-      const want = { x: mx * speed, y: 0, z: mz * speed };
-      const hasInput = ml > 0.1;
+      const sprint = sprinting ? MOVE.sprintMul : 1;
+      const tired = this.exhausted ? 0.8 : 1;
+      const speed = MOVE.walkSpeed * dazeSlow * sprint * tired * (this.liftAmount > 0.3 && this.holdingDynamic() ? 0.7 : 1);
+      const gv = this.grounded ? this.groundVel : { x: 0, y: 0, z: 0 };
+      const want = { x: mx * speed + gv.x, y: 0, z: mz * speed + gv.z };
       let ax = (want.x - pv.x) * MOVE.accel;
       let az = (want.z - pv.z) * MOVE.accel;
-      let maxA = MOVE.maxAccel * (hasInput ? 1 : 0.22);
+      let maxA = MOVE.maxAccel * (moving ? 1 : 0.22);
       if (!this.grounded) maxA *= MOVE.airControl;
       const al = Math.hypot(ax, az);
       if (al > maxA) {
@@ -263,26 +306,49 @@ export class Character {
       pelvis.applyImpulse({ x: ax * k * (LOWER_MASS / TOTAL_MASS), y: 0, z: az * k * (LOWER_MASS / TOTAL_MASS) }, true);
       torso.applyImpulse({ x: ax * k * (1 - LOWER_MASS / TOTAL_MASS), y: 0, z: az * k * (1 - LOWER_MASS / TOTAL_MASS) }, true);
 
-      // ---- jump --------------------------------------------------------
-      if (pressed('jump') && this.grounded && this.jumpCooldown <= 0 && this.balance > 0.55) {
-        const vy = MOVE.jumpSpeed - Math.max(0, pv.y);
-        for (const p of this.rag.parts) p.body.applyImpulse({ x: 0, y: p.def.mass * vy, z: 0 }, true);
-        this.jumpCooldown = MOVE.jumpCooldown;
-        this.hoverOff = 0.22;
-        ctx.emit({ type: 'jump', char: this.index });
+      // ---- jump / climb --------------------------------------------------
+      if (pressed('jump')) {
+        if (this.envGrips() > 0) this.climb(ctx);
+        else if (this.grounded && this.jumpCooldown <= 0 && this.balance > 0.55 && !this.move) {
+          const vy = MOVE.jumpSpeed * (this.exhausted ? 0.8 : 1) - Math.max(0, pv.y - this.groundVel.y);
+          for (const p of this.rag.parts) p.body.applyImpulse({ x: 0, y: p.def.mass * vy, z: 0 }, true);
+          this.jumpCooldown = MOVE.jumpCooldown;
+          this.hoverOff = 0.22;
+          this.drain(STAMINA.jump);
+          ctx.emit({ type: 'jump', char: this.index });
+        }
       }
+      if (this.grounded) this.airDiveUsed = false;
+      this.startMoves(ctx, pressed);
     }
+    this.updateMove(ctx, dt);
+    this.updateClimb(dt);
 
     // ---- balance torques ------------------------------------------------
     const muscle = this.state === 'ko' ? BODY.koMuscle : BODY.koMuscle + (1 - BODY.koMuscle) * Math.max(this.balance, 0.3);
-    const lean = { x: pv.x * 0.035, y: 1, z: pv.z * 0.035 };
-    const targetUp = normalize(lean);
     const fwd = yawDir(this.facing);
-    const up = control;
+    let targetUp = normalize({ x: pv.x * 0.035, y: 1, z: pv.z * 0.035 });
+    let up = control;
+    const mv = this.move;
+    if (mv && this.state === 'active') {
+      if (mv.kind === 'dive' && mv.phase !== 'recover') {
+        // Superman: body nearly horizontal, head first.
+        targetUp = normalize({ x: fwd.x * 1.6, y: 0.45, z: fwd.z * 1.6 });
+        up = Math.max(control, 0.7);
+      } else if (mv.kind === 'headbutt') {
+        const lean = mv.phase === 'windup' ? -0.45 : mv.phase === 'strike' ? 1.0 : 0.2;
+        targetUp = normalize({ x: fwd.x * lean, y: 1, z: fwd.z * lean });
+        up = Math.max(control, 0.6);
+      } else if (mv.kind === 'kick' && mv.phase !== 'windup') {
+        targetUp = normalize({ x: -fwd.x * 0.25, y: 1, z: -fwd.z * 0.25 });
+      }
+    }
     this.driveUpright(this.part('pelvis'), targetUp, fwd, BODY.uprightStiffness * up, BODY.uprightDamping * up, BODY.yawStiffness * up, BODY.yawDamping * up, dt);
     this.driveUpright(this.part('torso'), targetUp, fwd, BODY.uprightStiffness * up, BODY.uprightDamping * up, BODY.yawStiffness * up, BODY.yawDamping * up, dt);
     const hm = this.state === 'ko' ? 0.05 : Math.max(muscle, 0.4);
-    this.driveUpright(this.part('head'), UP, fwd, BODY.headStiffness * hm, BODY.headDamping * hm, BODY.headStiffness * 0.5 * hm, BODY.headDamping * 0.5 * hm, dt, torso.angvel());
+    this.driveUpright(this.part('head'), mv?.kind === 'headbutt' || mv?.kind === 'dive' ? targetUp : UP, fwd, BODY.headStiffness * hm, BODY.headDamping * hm, BODY.headStiffness * 0.5 * hm, BODY.headDamping * 0.5 * hm, dt, torso.angvel());
+
+    this.updateGetUp(ctx, dt);
 
     // ---- legs ------------------------------------------------------------
     this.driveLegs(pv, dt, muscle, ctx.time);
@@ -296,7 +362,9 @@ export class Character {
 
     this.effort = Math.max(0, this.effort - dt * 3);
     if (this.arms.some((a) => a.punch === 'windup' || a.punch === 'strike') || (this.liftAmount > 0.2 && this.holdingDynamic())) this.effort = 1;
+    if (this.move && this.move.phase !== 'recover') this.effort = 1;
     this.hurtTimer = Math.max(0, this.hurtTimer - dt);
+    this.updateStamina(ctx, dt, ml < 0.1 && this.grounded && !this.move && !this.input.grab);
 
     copyInput(prev, inp);
   }
@@ -311,6 +379,13 @@ export class Character {
     for (let i = 0; i < 2; i++) {
       const v = this.arms[i].hand.body.linvel();
       this.handVelPre[i] = { x: v.x, y: v.y, z: v.z };
+    }
+    for (let i = 0; i < PART_COUNT; i++) {
+      const v = this.rag.parts[i].body.linvel();
+      const o = this.partVelPre[i];
+      o.x = v.x;
+      o.y = v.y;
+      o.z = v.z;
     }
   }
 
@@ -341,7 +416,7 @@ export class Character {
     this.wasGrounded = this.grounded;
 
     // Toppling: lost balance without being knocked out.
-    if (this.state === 'active' && this.balance > 0.5 && this.stunTimer <= 0) {
+    if (this.state === 'active' && this.balance > 0.5 && this.stunTimer <= 0 && this.move?.kind !== 'dive' && this.move?.kind !== 'headbutt') {
       const tUp = rotate(torso.rotation(), UP);
       if (tUp.y < BODY.fallTiltDot) {
         this.stunTimer = 0.45;
@@ -358,19 +433,31 @@ export class Character {
   // Combat reactions
   // ------------------------------------------------------------------------
   /** Called by the sim when a strike connects with this character. */
-  receiveHit(ctx: SimContext, attacker: number, strength: number, head: boolean): void {
+  receiveHit(ctx: SimContext, attacker: number, strength: number, head: boolean, kind: AttackKind = 'punch'): void {
     this.hitThisStep = true;
     this.lastHitAt = ctx.time;
     this.hurtTimer = 0.45;
-    const daze = head
+    let daze = head
       ? COMBAT.dazeHeadBase + strength * COMBAT.dazeHeadPerSpeed
       : COMBAT.dazeBodyBase + strength * COMBAT.dazeBodyPerSpeed;
+    let stagger = (head ? 0.25 : 0.12) + strength * 0.025;
+    if (kind === 'kick') {
+      daze *= KICK.dazeScale;
+      stagger += 0.15;
+    } else if (kind === 'headbutt') {
+      daze *= head ? HEADBUTT.headDazeScale : HEADBUTT.bodyDazeScale;
+    } else if (kind === 'dive') {
+      daze = DIVE.daze + strength * 0.5;
+      this.stun(DIVE.victimStun);
+    }
     // Stagger: knock some balance out of them so hits visibly wobble.
-    if (this.state === 'active') this.balance = Math.max(0.05, this.balance - (head ? 0.25 : 0.12) - strength * 0.025);
+    if (this.state === 'active') this.balance = Math.max(0.05, this.balance - stagger);
     let suddenKo = false;
     if (head && strength > COMBAT.suddenKoSpeed) {
       suddenKo = ctx.rng() < (strength - COMBAT.suddenKoSpeed) * COMBAT.suddenKoChancePerSpeed;
     }
+    // Getting hit mid-move interrupts it.
+    if (this.move && this.move.kind !== 'dive') this.move = null;
     this.addDaze(ctx, daze, suddenKo);
     void attacker;
   }
@@ -392,6 +479,7 @@ export class Character {
     this.balance = 0;
     this.daze = COMBAT.koThreshold;
     this.releaseAll(ctx);
+    this.move = null;
     for (const a of this.arms) {
       a.punch = 'idle';
       a.punchT = 0;
@@ -434,6 +522,13 @@ export class Character {
     this.escape = 0;
     this.extraLoad = 0;
     this.effort = 0;
+    this.stamina = STAMINA.max;
+    this.exhausted = false;
+    this.staminaDelay = 0;
+    this.move = null;
+    this.airDiveUsed = false;
+    this.gettingUp = false;
+    this.climbing = null;
     this.hoverOff = 0;
     this.prevHeadVel = { x: 0, y: 0, z: 0 };
     this.prevTorsoVel = { x: 0, y: 0, z: 0 };
@@ -462,7 +557,13 @@ export class Character {
       const owner = this.groundBody ? ctx.ownerOfBody(this.groundBody) : null;
       if (owner?.kind === 'char' && owner.index === this.liftedBy) this.groundHit = false;
       if (this.groundBody && this.arms.some((a) => a.grabBody === this.groundBody)) this.groundHit = false;
+      const gb = this.groundBody;
+      if (this.groundHit && gb && !gb.isFixed()) {
+        const v = gb.velocityAtPoint({ x: p.x, y: p.y - hit.timeOfImpact, z: p.z });
+        this.groundVel = { x: v.x, y: v.y, z: v.z };
+      } else this.groundVel = { x: 0, y: 0, z: 0 };
     } else {
+      this.groundVel = { x: 0, y: 0, z: 0 };
       this.groundHit = false;
       this.groundDist = 99;
       this.groundBody = null;
@@ -470,7 +571,7 @@ export class Character {
     this.grounded = this.groundHit && this.groundDist < BODY.hoverHeight + 0.22;
   }
 
-  private updateBalance(ctx: SimContext, dt: number, pressed: (k: 'jump' | 'punch' | 'grab' | 'lift') => boolean): void {
+  private updateBalance(ctx: SimContext, dt: number, pressed: (k: Pressable) => boolean): void {
     if (ctx.time - this.lastHitAt > COMBAT.dazeDecayDelay && this.state === 'active') {
       this.daze = Math.max(0, this.daze - COMBAT.dazeDecay * dt);
     }
@@ -478,7 +579,7 @@ export class Character {
       this.balance = 0;
       this.koTimer -= dt;
       // Button mashing helps you come round sooner.
-      if (pressed('jump') || pressed('punch') || pressed('grab') || pressed('lift')) this.koTimer -= COMBAT.mashReduction;
+      if (pressed('jump') || pressed('punch') || pressed('grab') || pressed('lift') || pressed('kick')) this.koTimer -= COMBAT.mashReduction;
       if (this.koTimer <= 0) {
         this.state = 'active';
         this.daze = COMBAT.koThreshold * 0.35;
@@ -499,6 +600,241 @@ export class Character {
     if (this.liftedBy >= 0) this.balance = Math.min(this.balance, 0.35);
   }
 
+  // ------------------------------------------------------------------------
+  // Stamina
+  // ------------------------------------------------------------------------
+  /** Spend stamina (continuous drains and discrete action costs). */
+  drain(amount: number): void {
+    if (amount <= 0) return;
+    this.stamina = Math.max(0, this.stamina - amount);
+    this.staminaDelay = STAMINA.regenDelay;
+  }
+
+  /** Can we afford a special move costing `amount`? */
+  canAfford(amount: number): boolean {
+    return !this.exhausted && this.stamina >= amount * 0.5;
+  }
+
+  private updateStamina(ctx: SimContext, dt: number, resting: boolean): void {
+    if (this.staminaDelay > 0) this.staminaDelay -= dt;
+    else {
+      const rate = this.state === 'ko' || resting ? STAMINA.restRegen : STAMINA.regen;
+      this.stamina = Math.min(STAMINA.max, this.stamina + rate * dt);
+    }
+    if (this.stamina <= 0 && !this.exhausted) {
+      this.exhausted = true;
+      ctx.emit({ type: 'exhausted', char: this.index });
+    }
+    if (this.exhausted && this.stamina >= STAMINA.exhaustedUntil) this.exhausted = false;
+  }
+
+  // ------------------------------------------------------------------------
+  // Climbing
+  // ------------------------------------------------------------------------
+  /** Number of hands gripping static scenery. */
+  envGrips(): number {
+    let n = 0;
+    for (const a of this.arms) if (a.joint && a.grabOwner?.kind === 'env') n++;
+    return n;
+  }
+
+  /** Jump while gripping scenery: haul yourself up and over (ledges, crates, railings). */
+  private climb(ctx: SimContext): void {
+    if (!this.canAfford(STAMINA.climb)) return;
+    let gy = -Infinity;
+    let sx = 0;
+    let sz = 0;
+    let n = 0;
+    for (const a of this.arms) {
+      if (!a.joint || a.grabOwner?.kind !== 'env') continue;
+      const p = bodyPoint(a.hand.body, HAND_TIP_LOCAL);
+      gy = Math.max(gy, p.y);
+      sx += p.x;
+      sz += p.z;
+      n++;
+    }
+    const pelvis = this.part('pelvis').body.translation();
+    const f = yawDir(this.facing);
+    // Over the ledge = towards the hands, biased along where we're facing.
+    const dir = normalize({ x: sx / n - pelvis.x + f.x * 0.5, y: 0, z: sz / n - pelvis.z + f.z * 0.5 });
+    const h = Math.max(CLIMB.minHeight, gy + CLIMB.extraHeight - pelvis.y);
+    const vy = clamp(Math.sqrt(2 * G * h), CLIMB.minVy, CLIMB.maxVy);
+    for (const a of this.arms) {
+      if (a.grabOwner?.kind === 'env') {
+        this.release(ctx, a);
+        a.cooldown = 0.45;
+      }
+    }
+    // Phase 1: straight up the wall. Phase 2 (in updateClimb): over the top.
+    for (const p of this.rag.parts) p.body.setLinvel({ x: dir.x * 0.6, y: vy, z: dir.z * 0.6 }, true);
+    this.climbing = { dir, ledgeY: gy, t: 0 };
+    this.facing = Math.atan2(dir.x, dir.z);
+    this.hoverOff = 0.2;
+    this.jumpCooldown = MOVE.jumpCooldown;
+    this.drain(STAMINA.climb);
+    ctx.emit({ type: 'climb', char: this.index });
+  }
+
+  private updateClimb(dt: number): void {
+    const c = this.climbing;
+    if (!c) return;
+    c.t += dt;
+    if (this.state !== 'active' || c.t > 0.9) {
+      this.climbing = null;
+      return;
+    }
+    const pelvis = this.part('pelvis').body;
+    if (pelvis.translation().y > c.ledgeY + 0.25) {
+      for (const p of this.rag.parts) {
+        const v = p.body.linvel();
+        p.body.setLinvel({ x: c.dir.x * CLIMB.forward, y: Math.max(v.y, 0.5), z: c.dir.z * CLIMB.forward }, true);
+      }
+      this.climbing = null;
+    }
+  }
+
+  // ------------------------------------------------------------------------
+  // Kick / headbutt / dive tackle
+  // ------------------------------------------------------------------------
+  private startMoves(ctx: SimContext, pressed: (k: Pressable) => boolean): void {
+    if (this.move || this.liftAmount > 0.3) return;
+    const busyArms = this.arms.some((a) => a.punch === 'windup' || a.punch === 'strike');
+    const begin = (kind: BodyMove['kind'], aim: Vec3 | null): BodyMove => {
+      if (aim) {
+        const d = sub(aim, this.torsoPos);
+        this.facing = wrapAngle(this.facing + clamp(wrapAngle(Math.atan2(d.x, d.z) - this.facing), -0.7, 0.7));
+      }
+      const m: BodyMove = { kind, phase: 'windup', t: 0, leg: 0, dir: yawDir(this.facing), aim, hits: [] };
+      this.move = m;
+      return m;
+    };
+    if (pressed('dive') && this.balance > 0.45 && this.canAfford(STAMINA.dive)) {
+      const canAir = !this.grounded && this.airTime < DIVE.maxAirTime && !this.airDiveUsed;
+      if (this.grounded || canAir) {
+        this.startDive(ctx, !this.grounded);
+        return;
+      }
+    }
+    if (pressed('kick') && this.grounded && this.balance > 0.4 && !busyArms && this.canAfford(STAMINA.kick)) {
+      const m = begin('kick', this.findTarget(ctx, true));
+      m.leg = this.nextKickLeg;
+      this.nextKickLeg = 1 - this.nextKickLeg;
+      this.drain(STAMINA.kick);
+      return;
+    }
+    if (pressed('headbutt') && this.balance > 0.4 && !busyArms && this.canAfford(STAMINA.headbutt)) {
+      begin('headbutt', this.findTarget(ctx, false));
+      this.drain(STAMINA.headbutt);
+    }
+  }
+
+  private startDive(ctx: SimContext, aerial: boolean): void {
+    // Steer the dive with the stick if held.
+    const ml = Math.hypot(this.input.moveX, this.input.moveZ);
+    if (ml > 0.3) this.facing = Math.atan2(this.input.moveX, this.input.moveZ);
+    const f = yawDir(this.facing);
+    const pv = this.part('pelvis').body.linvel();
+    const along = pv.x * f.x + pv.z * f.z;
+    const hs = clamp(Math.max(along, DIVE.minSpeed) + DIVE.boost, 0, DIVE.maxSpeed);
+    const vy = aerial ? Math.max(pv.y, 1.5) : DIVE.lift;
+    for (const p of this.rag.parts) p.body.setLinvel({ x: f.x * hs, y: vy, z: f.z * hs }, true);
+    this.move = { kind: 'dive', phase: 'strike', t: 0, leg: 0, dir: f, aim: null, hits: [] };
+    this.hoverOff = 0.35;
+    this.airDiveUsed = true;
+    this.releaseAll(ctx);
+    this.drain(STAMINA.dive);
+    ctx.emit({ type: 'dive', char: this.index });
+  }
+
+  private updateMove(ctx: SimContext, dt: number): void {
+    const m = this.move;
+    if (!m) return;
+    if (this.state !== 'active') {
+      this.move = null;
+      return;
+    }
+    m.t += dt;
+    const torso = this.part('torso').body;
+    const tv = torso.linvel();
+    if (m.kind === 'dive') {
+      if (m.phase === 'strike') {
+        // Land (or run out of time): end up sprawled on the floor.
+        if ((this.grounded && m.t > 0.25) || this.groundDist < 0.45 || m.t > DIVE.maxDuration) {
+          m.phase = 'recover';
+          m.t = 0;
+          this.stun(DIVE.landStun);
+        }
+      } else if (m.t > DIVE.landStun) this.move = null;
+      return;
+    }
+    const P = m.kind === 'kick' ? KICK : HEADBUTT;
+    if (m.phase === 'windup' && m.t >= P.windup) {
+      m.phase = 'strike';
+      m.t = 0;
+      let dir = yawDir(this.facing);
+      if (m.kind === 'kick') {
+        if (m.aim) {
+          const d = sub(m.aim, this.torsoPos);
+          const h = Math.hypot(d.x, d.z);
+          if (h > 0.1) dir = normalize({ x: d.x / h, y: clamp(d.y, -0.2, 0.4), z: d.z / h });
+        }
+        m.dir = dir;
+        const shin = this.part(m.leg === 0 ? 'shinL' : 'shinR').body;
+        const thigh = this.part(m.leg === 0 ? 'thighL' : 'thighR').body;
+        const sp = KICK.footSpeed;
+        shin.setLinvel({ x: tv.x + dir.x * sp, y: tv.y + dir.y * sp + 1.5, z: tv.z + dir.z * sp }, true);
+        thigh.setLinvel({ x: tv.x + dir.x * sp * 0.5, y: tv.y + 1, z: tv.z + dir.z * sp * 0.5 }, true);
+        this.balance = Math.max(0.2, this.balance - KICK.selfBalanceCost);
+        ctx.emit({ type: 'kick', char: this.index });
+      } else {
+        const head = this.part('head').body;
+        if (m.aim) dir = normalize(sub({ x: m.aim.x, y: m.aim.y - 0.05, z: m.aim.z }, head.translation()));
+        if (dir.x * yawDir(this.facing).x + dir.z * yawDir(this.facing).z < 0.3) dir = yawDir(this.facing);
+        m.dir = dir;
+        const sp = HEADBUTT.headSpeed;
+        head.setLinvel({ x: tv.x + dir.x * sp, y: tv.y + dir.y * sp, z: tv.z + dir.z * sp }, true);
+        torso.applyImpulse(scale(yawDir(this.facing), 22), true);
+        ctx.emit({ type: 'headbutt', char: this.index });
+      }
+    } else if (m.phase === 'strike' && m.t >= P.strike) {
+      m.phase = 'recover';
+      m.t = 0;
+    } else if (m.phase === 'recover' && m.t >= P.recover) {
+      this.move = null;
+    }
+  }
+
+  /** If `part` is currently delivering an attack, describe it. */
+  strikeFor(part: PartName): Strike | null {
+    if (this.state !== 'active') return null;
+    if (part === 'handL' || part === 'handR') {
+      const a = this.arms[part === 'handL' ? 0 : 1];
+      if (a.punch === 'strike') return { kind: 'punch', dir: a.strikeDir, hits: a.punchHits };
+    }
+    const m = this.move;
+    if (!m || m.phase !== 'strike') return null;
+    if (m.kind === 'kick' && part === (m.leg === 0 ? 'shinL' : 'shinR')) return { kind: 'kick', dir: m.dir, hits: m.hits };
+    if (m.kind === 'headbutt' && part === 'head') return { kind: 'headbutt', dir: m.dir, hits: m.hits };
+    if (m.kind === 'dive' && !part.startsWith('thigh') && !part.startsWith('shin')) return { kind: 'dive', dir: m.dir, hits: m.hits };
+    return null;
+  }
+
+  // ------------------------------------------------------------------------
+  // Getting up
+  // ------------------------------------------------------------------------
+  private updateGetUp(ctx: SimContext, dt: number): void {
+    const lying = rotate(this.part('torso').body.rotation(), UP).y < 0.55 && this.groundDist < 0.9;
+    const was = this.gettingUp;
+    this.gettingUp = this.state === 'active' && this.stunTimer <= 0 && lying && this.move?.kind !== 'dive';
+    if (this.gettingUp) {
+      // A helping heave on the chest while the arms push, scaled by regained balance.
+      const torso = this.part('torso');
+      const j = torso.def.mass * G * 0.55 * this.balance * dt;
+      torso.body.applyImpulse({ x: 0, y: j, z: 0 }, true);
+      if (!was) ctx.emit({ type: 'getup', char: this.index });
+    }
+  }
+
   /** Characters currently holding us with at least one hand. */
   heldBy(ctx: SimContext): Character[] {
     const out: Character[] = [];
@@ -510,7 +846,7 @@ export class Character {
   }
 
   /** Conscious fighters can wriggle free by mashing buttons and pulling away. */
-  private updateStruggle(ctx: SimContext, dt: number, pressed: (k: 'jump' | 'punch' | 'grab' | 'lift') => boolean): void {
+  private updateStruggle(ctx: SimContext, dt: number, pressed: (k: Pressable) => boolean): void {
     if (this.state !== 'active') {
       this.escape = 0;
       return;
@@ -520,7 +856,10 @@ export class Character {
       this.escape = Math.max(0, this.escape - GRAB.escapeDecay * dt);
       return;
     }
-    if (pressed('jump') || pressed('punch') || pressed('grab') || pressed('lift')) this.escape += GRAB.escapePerPress;
+    if (pressed('jump') || pressed('punch') || pressed('grab') || pressed('lift') || pressed('kick')) {
+      this.escape += GRAB.escapePerPress * (this.exhausted ? 0.5 : 1);
+      this.drain(STAMINA.struggle);
+    }
     if (Math.hypot(this.input.moveX, this.input.moveZ) > 0.5) this.escape += GRAB.escapePerSecondMoving * dt;
     this.escape = Math.max(0, this.escape - GRAB.escapeDecay * 0.3 * dt);
     if (this.escape >= 1) {
@@ -639,7 +978,30 @@ export class Character {
       const ph = this.walkPhase + offset;
       let a: number;
       let bend: number;
-      if (this.grounded || this.state !== 'active') {
+      const legIdx = sign > 0 ? 0 : 1;
+      const mv = this.state === 'active' ? this.move : null;
+      let legKp = kp;
+      if (mv?.kind === 'kick' && mv.leg === legIdx) {
+        if (mv.phase === 'windup') {
+          a = -0.55;
+          bend = 1.3;
+        } else if (mv.phase === 'strike') {
+          a = 1.35;
+          bend = 0;
+        } else {
+          a = 0.5;
+          bend = 0.4;
+        }
+        legKp = kp * 2.5;
+      } else if (mv?.kind === 'dive' && mv.phase !== 'recover') {
+        // Legs trail straight behind the body.
+        a = -1.2;
+        bend = 0.1;
+      } else if (this.gettingUp) {
+        // Tuck the knees under to get up.
+        a = 0.9;
+        bend = 1.4;
+      } else if (this.grounded || this.state !== 'active') {
         a = Math.sin(ph) * amp;
         bend = Math.max(0, Math.cos(ph)) * amp * 1.3 + 0.08;
       } else {
@@ -653,8 +1015,8 @@ export class Character {
       const shinDir = this.dir(0.03 * sign, -Math.cos(shinA), Math.sin(shinA));
       const thigh = this.part(thighN);
       const shin = this.part(shinN);
-      this.driveLimb(thigh, pelvis, thighDir, kp, kd, dt);
-      this.driveLimb(shin, thigh.body, shinDir, kp, kd, dt);
+      this.driveLimb(thigh, pelvis, thighDir, legKp, kd, dt);
+      this.driveLimb(shin, thigh.body, shinDir, legKp, kd, dt);
       if (!this.grounded) {
         this.supportWeight(thigh, pelvis, muscle * 0.9, dt);
         this.supportWeight(shin, pelvis, muscle * 0.9, dt);
@@ -694,10 +1056,10 @@ export class Character {
       const order = this.nextPunch === 0 ? [0, 1] : [1, 0];
       for (const i of order) {
         const a = this.arms[i];
-        if (a.punch === 'idle' && !a.joint && this.liftAmount < 0.3) {
+        if (a.punch === 'idle' && !a.joint && this.liftAmount < 0.3 && !this.move) {
           a.punch = 'windup';
           a.punchT = 0;
-          a.punchHit = false;
+          a.punchHits = [];
           a.aim = this.findTarget(ctx, false);
           this.nextPunch = 1 - i;
           // Auto-face whoever we're swinging at.
@@ -723,7 +1085,8 @@ export class Character {
         a.strikeDir = dir;
         // Snap the fist out along the aim line (relative to the body's own motion).
         const tv = this.part('torso').body.linvel();
-        const sp = COMBAT.punchHandSpeed;
+        const sp = COMBAT.punchHandSpeed * (this.exhausted ? 0.7 : 1);
+        this.drain(STAMINA.punch);
         a.hand.body.setLinvel({ x: tv.x + dir.x * sp, y: tv.y + dir.y * sp, z: tv.z + dir.z * sp }, true);
         a.upper.body.setLinvel({ x: tv.x + dir.x * sp * 0.5, y: tv.y + dir.y * sp * 0.5, z: tv.z + dir.z * sp * 0.5 }, true);
         const fwd = yawDir(this.facing);
@@ -784,8 +1147,23 @@ export class Character {
       this.tryAttach(ctx, a);
     }
 
+    // Hanging off scenery costs stamina; run out and your grip fails.
+    if (active && !this.grounded && this.envGrips() > 0) {
+      this.drain(STAMINA.hangPerSec * dt);
+      if (this.exhausted) {
+        for (const a of this.arms) {
+          if (a.grabOwner?.kind === 'env') {
+            this.release(ctx, a);
+            a.cooldown = 1.2;
+          }
+        }
+      }
+    }
+
     // Lifting.
-    const lifting = active && this.input.lift;
+    const liftingHeavy = this.liftAmount > 0.2 && this.holdingDynamic();
+    if (active && liftingHeavy) this.drain(STAMINA.liftPerSec * dt);
+    const lifting = active && this.input.lift && !(this.exhausted && liftingHeavy);
     this.liftAmount = lifting ? Math.min(1, this.liftAmount + dt / GRAB.liftTime) : Math.max(0, this.liftAmount - dt * 3);
     if (this.liftAmount > 0.05) this.applyLiftAssist(ctx, dt);
   }
@@ -903,7 +1281,8 @@ export class Character {
     }
     for (const b of props) {
       b.applyImpulse(scale(v, b.mass() * 1.15), true);
-      ctx.emit({ type: 'throw', char: this.index, victim: -1 });
+      const o = ctx.ownerOfBody(b);
+      ctx.emit({ type: 'throw', char: this.index, victim: -1, prop: o?.kind === 'prop' ? o.index : undefined });
     }
     this.throwTimer = 0.3;
     this.liftAmount = 0;
@@ -930,6 +1309,16 @@ export class Character {
       if (this.state === 'ko') {
         upperDir = this.dir(s * 0.3, -1, 0);
         handDir = upperDir;
+      } else if (this.move?.kind === 'dive' && this.move.phase !== 'recover') {
+        // Arms out in front for the tackle.
+        upperDir = this.dir(s * 0.25, 0.25, 1);
+        handDir = upperDir;
+        strength = 2;
+      } else if (this.gettingUp && !a.joint) {
+        // Plant the hands and push off the floor.
+        upperDir = this.dir(s * 0.45, -1, 0.35);
+        handDir = this.dir(s * 0.3, -1, 0.15);
+        strength = 2.2;
       } else if (a.punch === 'windup') {
         // Cock the elbow back at shoulder height, fist forward by the chin.
         upperDir = this.dir(s * 0.55, -0.2, -0.75);

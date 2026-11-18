@@ -1,14 +1,15 @@
 import type RAPIER_NS from '@dimforge/rapier3d-compat';
 import { RAPIER, envGroups, propGroups, MAX_CHARACTERS } from './physics';
-import { COMBAT, PHYSICS } from './config';
+import { COMBAT, DIVE, HEADBUTT, KICK, PHYSICS, PROPS } from './config';
 import type { ArenaDef, PropDef } from './arena';
 import { Character } from './character';
 import type { Owner, SimContext } from './character';
-import type { SimEvent } from './events';
+import type { AttackKind, SimEvent } from './events';
 import type { PlayerInput } from './input';
-import { makeRng, normalize, quatYaw, sub, len } from './math';
+import { emptyInput } from './input';
+import { clamp, makeRng, normalize, quatYaw, sub, len } from './math';
 import type { Vec3 } from './math';
-import { PART_COUNT } from './ragdoll';
+import { PART_COUNT, PART_INDEX } from './ragdoll';
 import { RoundRules } from './rules';
 
 type World = RAPIER_NS.World;
@@ -18,7 +19,28 @@ export interface Prop {
   index: number;
   def: PropDef;
   body: RigidBody;
+  /** Who last threw / kicked / punched it, and when (for hit credit). */
+  lastThrower: number;
+  thrownAt: number;
+  velPre: Vec3;
+  /** Per-victim time of the last hit this prop dealt (debounce). */
+  lastHitAt: Map<number, number>;
 }
+
+interface StrikeParams {
+  minHit: number;
+  kbBase: number;
+  kbPerSpeed: number;
+  /** Fraction of the knockback applied to the struck part (rest goes to the torso). */
+  partShare: number;
+}
+
+const STRIKES: Record<Exclude<AttackKind, 'prop'>, StrikeParams> = {
+  punch: { minHit: COMBAT.minHitSpeed, kbBase: COMBAT.knockbackBase, kbPerSpeed: COMBAT.knockbackPerSpeed, partShare: 0.45 },
+  kick: { minHit: KICK.minHitSpeed, kbBase: KICK.knockbackBase, kbPerSpeed: KICK.knockbackPerSpeed, partShare: 0.35 },
+  headbutt: { minHit: HEADBUTT.minHitSpeed, kbBase: HEADBUTT.knockbackBase, kbPerSpeed: HEADBUTT.knockbackPerSpeed, partShare: 0.5 },
+  dive: { minHit: DIVE.minHitSpeed, kbBase: DIVE.knockbackBase, kbPerSpeed: DIVE.knockbackPerSpeed, partShare: 0.3 },
+};
 
 export interface SimOptions {
   arena: ArenaDef;
@@ -112,13 +134,15 @@ export class GameSim implements SimContext {
       let desc: RAPIER_NS.ColliderDesc;
       if (def.shape === 'crate') desc = RAPIER.ColliderDesc.roundCuboid(def.half.x - 0.03, def.half.y - 0.03, def.half.z - 0.03, 0.03);
       else if (def.shape === 'barrel') desc = RAPIER.ColliderDesc.cylinder(def.half.y, def.half.x);
+      else if (def.shape === 'ball') desc = RAPIER.ColliderDesc.ball(def.half.x);
       else desc = RAPIER.ColliderDesc.cone(def.half.y, def.half.x);
-      desc.setMass(def.mass).setFriction(0.7).setRestitution(0.15).setCollisionGroups(propGroups());
+      const bouncy = def.shape === 'ball';
+      desc.setMass(def.mass).setFriction(bouncy ? 0.5 : 0.7).setRestitution(bouncy ? 0.65 : 0.15).setCollisionGroups(propGroups());
       const c = this.world.createCollider(desc, body);
       const o: Owner = { kind: 'prop', index };
       this.colliderOwner.set(c.handle, o);
       this.bodyOwner.set(body.handle, o);
-      this.props.push({ index, def, body });
+      this.props.push({ index, def, body, lastThrower: -1, thrownAt: -99, velPre: { x: 0, y: 0, z: 0 }, lastHitAt: new Map() });
       this.propBodies.push(body);
     });
   }
@@ -135,7 +159,15 @@ export class GameSim implements SimContext {
   }
 
   emit(ev: SimEvent): void {
+    if (ev.type === 'throw' && ev.prop !== undefined) this.creditProp(ev.prop, ev.char);
     this.events.push(ev);
+  }
+
+  private creditProp(index: number, char: number): void {
+    const p = this.props[index];
+    if (!p) return;
+    p.lastThrower = char;
+    p.thrownAt = this.time;
   }
 
   drainEvents(): SimEvent[] {
@@ -152,10 +184,16 @@ export class GameSim implements SimContext {
       const c = this.characters[i];
       const inp = inputs[i];
       if (inp && canAct) c.setInput(inp);
-      else c.setInput({ moveX: 0, moveZ: 0, jump: false, punch: false, grab: false, lift: false, sprint: false });
+      else c.setInput(emptyInput());
     }
     for (const c of this.characters) c.preStep(this, this.dt);
     for (const c of this.characters) c.capturePreStep();
+    for (const p of this.props) {
+      const v = p.body.linvel();
+      p.velPre.x = v.x;
+      p.velPre.y = v.y;
+      p.velPre.z = v.z;
+    }
 
     this.world.step(this.eventQueue);
     this.time += this.dt;
@@ -165,6 +203,8 @@ export class GameSim implements SimContext {
       if (!started) return;
       this.checkStrike(h1, h2);
       this.checkStrike(h2, h1);
+      this.checkPropHit(h1, h2);
+      this.checkPropHit(h2, h1);
     });
     for (const c of this.characters) c.postStep(this);
     this.recycleFallenProps();
@@ -172,43 +212,80 @@ export class GameSim implements SimContext {
     this.writeSnapshot(this.currSnap);
   }
 
-  /** If collider `a` is a striking hand and `b` belongs to another character, resolve a hit. */
+  /**
+   * If collider `a` is a body part currently delivering an attack (fist, foot,
+   * head, diving body) and `b` is another fighter or a prop, resolve the hit.
+   */
   private checkStrike(a: number, b: number): void {
     const oa = this.colliderOwner.get(a);
     const ob = this.colliderOwner.get(b);
-    if (!oa || !ob || oa.kind !== 'char' || ob.kind !== 'char' || oa.index === ob.index) return;
-    if (oa.part !== 'handL' && oa.part !== 'handR') return;
+    if (!oa || !ob || oa.kind !== 'char') return;
     const attacker = this.characters[oa.index];
+    const strike = attacker.strikeFor(oa.part);
+    if (!strike || strike.kind === 'prop') return;
+    const P = STRIKES[strike.kind];
+    const av = attacker.partVelPre[PART_INDEX[oa.part]];
+    const hitPos = attacker.part(oa.part).body.translation();
+
+    if (ob.kind === 'prop') {
+      const key = 100 + ob.index;
+      if (strike.hits.includes(key)) return;
+      const prop = this.props[ob.index];
+      const strength = len(sub(av, prop.body.linvel()));
+      if (strength < P.minHit) return;
+      strike.hits.push(key);
+      const dir = normalize({ x: strike.dir.x, y: Math.max(0.15, strike.dir.y), z: strike.dir.z });
+      const mag = (P.kbBase + P.kbPerSpeed * strength) * 0.5;
+      prop.body.applyImpulse({ x: dir.x * mag, y: dir.y * mag, z: dir.z * mag }, true);
+      this.creditProp(ob.index, attacker.index);
+      this.emit({ type: 'propHit', prop: ob.index, pos: hitPos, strength });
+      return;
+    }
+    if (ob.kind !== 'char' || ob.index === oa.index) return;
     const victim = this.characters[ob.index];
-    if (attacker.state !== 'active' || !victim.alive) return;
-    const armIdx = oa.part === 'handL' ? 0 : 1;
-    const arm = attacker.arms[armIdx];
-    if (arm.punch !== 'strike' || arm.punchHit) return;
+    if (!victim.alive || strike.hits.includes(victim.index)) return;
     const vPart = victim.part(ob.part);
-    const hv = attacker.handVelPre[armIdx];
-    const vv = vPart.body.linvel();
-    const rel = sub(hv, vv);
+    const rel = sub(av, vPart.body.linvel());
     const strength = len(rel);
-    if (strength < COMBAT.minHitSpeed) return;
-    arm.punchHit = true;
+    if (strength < P.minHit) return;
+    strike.hits.push(victim.index);
     const isHead = ob.part === 'head';
-    // Knock back mostly along the punch line, a bit along the actual impact, with some lift.
+    // Knock back mostly along the attack line, a bit along the actual impact, with some lift.
     const rn = normalize(rel);
-    const sd = arm.strikeDir;
+    const sd = strike.dir;
     const dir = normalize({ x: sd.x + rn.x * 0.4, y: Math.max(0, sd.y) * 0.5 + 0.28, z: sd.z + rn.z * 0.4 });
-    const mag = COMBAT.knockbackBase + COMBAT.knockbackPerSpeed * strength;
-    vPart.body.applyImpulse({ x: dir.x * mag * 0.45, y: dir.y * mag * 0.45, z: dir.z * mag * 0.45 }, true);
+    const mag = P.kbBase + P.kbPerSpeed * strength;
+    const ps = P.partShare;
+    vPart.body.applyImpulse({ x: dir.x * mag * ps, y: dir.y * mag * ps, z: dir.z * mag * ps }, true);
     const vt = victim.part('torso').body;
-    vt.applyImpulse({ x: dir.x * mag * 0.75, y: dir.y * mag * 0.4, z: dir.z * mag * 0.75 }, true);
-    victim.receiveHit(this, attacker.index, strength, isHead);
-    this.emit({
-      type: 'hit',
-      attacker: attacker.index,
-      victim: victim.index,
-      pos: arm.hand.body.translation(),
-      strength,
-      head: isHead,
-    });
+    const ts = 1.2 - ps;
+    vt.applyImpulse({ x: dir.x * mag * ts, y: dir.y * mag * 0.4, z: dir.z * mag * ts }, true);
+    victim.receiveHit(this, attacker.index, strength, isHead, strike.kind);
+    if (strike.kind === 'headbutt') attacker.addDaze(this, HEADBUTT.selfDaze, false);
+    this.emit({ type: 'hit', attacker: attacker.index, victim: victim.index, pos: hitPos, strength, head: isHead, kind: strike.kind });
+  }
+
+  /** A fast-moving prop (thrown crate, kicked barrel…) slamming into a fighter. */
+  private checkPropHit(a: number, b: number): void {
+    const oa = this.colliderOwner.get(a);
+    const ob = this.colliderOwner.get(b);
+    if (!oa || !ob || oa.kind !== 'prop' || ob.kind !== 'char') return;
+    const prop = this.props[oa.index];
+    const victim = this.characters[ob.index];
+    if (!victim.alive) return;
+    // Being carried by this very fighter doesn't count.
+    if (victim.arms.some((arm) => arm.grabBody === prop.body)) return;
+    const vPart = victim.part(ob.part);
+    const rel = len(sub(prop.velPre, vPart.body.linvel()));
+    if (rel < PROPS.hitMinSpeed) return;
+    if ((prop.lastHitAt.get(victim.index) ?? -99) > this.time - 0.5) return;
+    prop.lastHitAt.set(victim.index, this.time);
+    const credited = this.time - prop.thrownAt < PROPS.thrownCredit ? prop.lastThrower : -1;
+    if (credited === victim.index) return;
+    const strength = clamp(rel * prop.body.mass() * PROPS.hitScale, 0, 16);
+    const isHead = ob.part === 'head';
+    victim.receiveHit(this, credited, strength, isHead, 'prop');
+    this.emit({ type: 'hit', attacker: credited, victim: victim.index, pos: vPart.body.translation(), strength, head: isHead, kind: 'prop' });
   }
 
   /** Props that fall off the map respawn at their original spot. */

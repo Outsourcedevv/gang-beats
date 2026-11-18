@@ -183,10 +183,35 @@ export class Game {
         this.fx.hit(p, ev.strength);
         sfx.hit(ev.strength, ev.head);
         sfx.grunt(look(ev.victim).voice, 0.9);
-        this.views[ev.victim]?.bump(ev.head ? 3.2 : 2);
-        if (ev.strength > 9) this.rig.addShake(0.05);
+        this.views[ev.victim]?.bump(ev.head ? 3.2 : ev.kind === 'kick' || ev.kind === 'dive' ? 2.8 : 2);
+        if (ev.strength > 9 || ev.kind === 'dive') this.rig.addShake(ev.kind === 'dive' ? 0.07 : 0.05);
         break;
       }
+      case 'propHit':
+        this.fx.hit(new THREE.Vector3(ev.pos.x, ev.pos.y, ev.pos.z), ev.strength * 0.6);
+        sfx.clunk(ev.strength);
+        break;
+      case 'kick':
+        sfx.kick();
+        if (Math.random() < 0.4) sfx.grunt(look(ev.char).voice, 0.7);
+        break;
+      case 'headbutt':
+        sfx.headbutt();
+        sfx.grunt(look(ev.char).voice, 0.8);
+        break;
+      case 'dive':
+        sfx.dive();
+        sfx.grunt(look(ev.char).voice, 1);
+        break;
+      case 'climb':
+        sfx.grunt(look(ev.char).voice, 0.9);
+        break;
+      case 'exhausted':
+        sfx.pant(look(ev.char).voice);
+        break;
+      case 'getup':
+        if (Math.random() < 0.5) sfx.grunt(look(ev.char).voice, 0.5);
+        break;
       case 'impact': {
         this.fx.dust(new THREE.Vector3(ev.pos.x, ev.pos.y, ev.pos.z), ev.strength);
         sfx.thud(ev.strength);

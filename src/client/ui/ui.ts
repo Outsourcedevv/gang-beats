@@ -1,7 +1,7 @@
 import type { Game } from '../game';
 import type { SimEvent } from '../../sim/events';
 import { WINS_TO_WIN_MATCH } from '../../sim/rules';
-import { COMBAT } from '../../sim/config';
+import { COMBAT, STAMINA } from '../../sim/config';
 import { FIGHTERS } from '../render/fighters';
 import type { InputManager, DeviceId, Action } from '../input/devices';
 import { ACTIONS, ACTION_LABELS, DEFAULT_BINDINGS, DEVICE_LABELS, keyLabel } from '../input/devices';
@@ -28,7 +28,7 @@ const hex = (n: number) => '#' + n.toString(16).padStart(6, '0');
 
 const DEVICE_ORDER: DeviceId[] = ['kbA', 'kbB', 'pad0', 'pad1', 'pad2', 'pad3', 'bot', 'off'];
 
-export const GAME_TITLE = 'Wobbleweights';
+export const GAME_TITLE = 'Wobble Weights';
 
 /**
  * All DOM UI: the fighter setup screen, controls/rebinding, pause menu and the
@@ -305,7 +305,7 @@ export class UI {
         'div',
         { class: 'panel' },
         h('h2', {}, 'Controls'),
-        h('p', { class: 'note' }, 'Click a key to rebind it. Mouse (WASD player): left = punch, right = grab, middle = lift. Gamepad: stick move, A jump, X punch, RT/RB grab, LT/LB lift, L3/B sprint, Start pause.'),
+        h('p', { class: 'note' }, 'Click a key to rebind it. Mouse (WASD player): left = punch, right = grab, middle = lift. Gamepad: stick move, A jump, X punch, B kick, Y headbutt, RT grab, LT lift, RB dive, LB/L3 sprint, Start pause.'),
         h('table', { class: 'bindings' }, h('tr', {}, h('th', {}, 'Action'), h('th', {}, 'Keyboard — WASD'), h('th', {}, 'Keyboard — Arrows')), ...ACTIONS.map(row)),
         h(
           'div',
@@ -323,7 +323,17 @@ export class UI {
             },
             'Reset defaults',
           ),
-          h('button', { class: 'btn primary', onclick: () => this.show(this.controlsReturn) }, 'Done'),
+          h(
+            'button',
+            {
+              class: 'btn primary',
+              onclick: () => {
+                this.renderHelp();
+                this.show(this.controlsReturn);
+              },
+            },
+            'Done',
+          ),
         ),
         h(
           'div',
@@ -333,6 +343,9 @@ export class UI {
             h('li', {}, 'Punch to daze. Enough hits (or one big one to the head) knocks a fighter out cold.'),
             h('li', {}, 'Hold Grab to reach with both hands — they stick to whatever they touch: fighters, crates, railings.'),
             h('li', {}, 'While grabbing, hold Lift to hoist them overhead, then let go of Grab to throw.'),
+            h('li', {}, 'Kicks shove hardest, headbutts daze the most (and sting you a little). Sprint then Dive for a flying tackle — even out of a jump.'),
+            h('li', {}, 'Hanging from a ledge or railing? Press Jump to climb up and over. Jump while gripping a railing to vault it.'),
+            h('li', {}, 'Watch your stamina: sprinting, specials, hanging and lifting drain it. Run dry and your grip slips — stand still to recover.'),
             h('li', {}, 'Knocked-out fighters can be dragged and tossed. Mash buttons to wake up faster.'),
             h('li', {}, 'Fall off the roof and you are out for the round.'),
           ),
@@ -399,20 +412,26 @@ export class UI {
 
   // ---------------------------------------------------------------------- help
   private buildHelp(): void {
-    const b = this.input.bindings.kbA;
-    const k = (a: Action) => b[a].map(keyLabel).join('/');
-    this.helpEl = h(
-      'div',
-      { class: 'help hidden' },
-      h('b', {}, 'WASD player'),
-      ` move ${k('up')}${k('left')}${k('down')}${k('right')} · jump ${k('jump')} · punch ${k('punch')}/LMB · grab ${k('grab')}/RMB · lift ${k('lift')} · sprint ${k('sprint')}`,
-      h('br'),
-      h('b', {}, 'Arrows player'),
-      ' move ←↑↓→ · jump R-Shift/Num0 · punch . /Num1 · grab / /Num2 · lift \' /Num3',
-      h('br'),
-      h('span', { class: 'dim' }, 'Grab + Lift, then release Grab to throw · H toggles this help · Esc pauses · F3 stats'),
-    );
+    this.helpEl = h('div', { class: 'help hidden' });
     this.root.append(this.helpEl);
+    this.renderHelp();
+  }
+
+  private renderHelp(): void {
+    const line = (scheme: 'kbA' | 'kbB') => {
+      const b = this.input.bindings[scheme];
+      const k = (a: Action) => b[a].map(keyLabel).join('/');
+      return `move ${k('up')}${k('left')}${k('down')}${k('right')} · jump ${k('jump')} · punch ${k('punch')} · kick ${k('kick')} · headbutt ${k('headbutt')} · grab ${k('grab')} · lift ${k('lift')} · dive ${k('dive')} · sprint ${k('sprint')}`;
+    };
+    this.helpEl.replaceChildren(
+      h('b', {}, 'WASD player '),
+      line('kbA') + ' · mouse L punch / R grab / M lift',
+      h('br'),
+      h('b', {}, 'Arrows player '),
+      line('kbB'),
+      h('br'),
+      h('span', { class: 'dim' }, 'Grab + Lift then release Grab = throw · Jump while hanging = climb · H toggles this help · Esc pauses · F3 stats'),
+    );
   }
 
   // ----------------------------------------------------------------------- HUD
@@ -434,13 +453,16 @@ export class UI {
           { class: 'card', 'data-i': i, style: `--c:${hex(f.look.body)}` },
           h('div', { class: 'card-name' }, `P${i + 1} ${f.look.name}`),
           h('div', { class: 'card-dev' }, DEVICE_LABELS[f.device]),
+          h('div', { class: 'bar-label' }, 'daze'),
           h('div', { class: 'daze' }, h('div', { class: 'daze-fill' })),
+          h('div', { class: 'bar-label' }, 'stamina'),
+          h('div', { class: 'stam' }, h('div', { class: 'stam-fill' })),
           h('div', { class: 'card-state' }),
         ),
       ),
     );
     this.tagsEl.replaceChildren(
-      ...this.game.fighters.map((f, i) => h('div', { class: 'tag', style: `--c:${hex(f.look.body)}` }, `P${i + 1}`)),
+      ...this.game.fighters.map((f, i) => h('div', { class: 'tag', style: `--c:${hex(f.look.body)}` }, `P${i + 1}`, h('div', { class: 'tag-stam' }, h('i')))),
     );
   }
 
@@ -535,8 +557,22 @@ export class UI {
       if (!card) return;
       const fill = card.querySelector('.daze-fill') as HTMLElement;
       fill.style.width = `${Math.min(100, (c.daze / COMBAT.koThreshold) * 100)}%`;
+      const stam = card.querySelector('.stam-fill') as HTMLElement;
+      stam.style.width = `${(c.stamina / STAMINA.max) * 100}%`;
+      stam.classList.toggle('empty', c.exhausted);
       const state = card.querySelector('.card-state') as HTMLElement;
-      const label = c.state === 'eliminated' ? 'OUT — spectating' : c.state === 'ko' ? `KO'd! ${Math.max(0, c.koTimer).toFixed(1)}s` : c.daze > 60 ? 'Dazed' : '';
+      const label =
+        c.state === 'eliminated'
+          ? 'OUT — spectating'
+          : c.state === 'ko'
+            ? `KO'd! ${Math.max(0, c.koTimer).toFixed(1)}s`
+            : c.exhausted
+              ? 'Exhausted!'
+              : c.envGrips() > 0 && !c.grounded
+                ? 'Hanging on — Jump to climb'
+                : c.daze > 60
+                  ? 'Dazed'
+                  : '';
       if (state.textContent !== label) state.textContent = label;
       card.classList.toggle('out', c.state === 'eliminated');
       card.classList.toggle('ko', c.state === 'ko');
@@ -550,6 +586,12 @@ export class UI {
       const show = c.alive && p && p.visible;
       tag.style.display = show ? 'block' : 'none';
       if (show && p) tag.style.transform = `translate(${p.x}px, ${p.y}px) translate(-50%, -100%)`;
+      const bar = tag.querySelector('.tag-stam i') as HTMLElement | null;
+      if (bar) {
+        bar.style.width = `${(c.stamina / STAMINA.max) * 100}%`;
+        bar.classList.toggle('empty', c.exhausted);
+      }
+      (tag.querySelector('.tag-stam') as HTMLElement | null)?.classList.toggle('full', c.stamina >= STAMINA.max - 0.5);
     });
     if (this.showStats) {
       this.statsEl.textContent = `${this.game.fps.toFixed(0)} fps · physics ${this.game.stepMs.toFixed(2)} ms/step · ${sim.characters.length} fighters`;

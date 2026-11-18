@@ -80,3 +80,75 @@ export const GRAB = {
   escapePerSecondMoving: 0.25,
   escapeDecay: 0.25,
 };
+
+export const STAMINA = {
+  max: 100,
+  regen: 20, // per second once the delay has passed
+  restRegen: 34, // standing still on the ground
+  regenDelay: 0.7,
+  exhaustedUntil: 30, // once empty, you're exhausted until refilled to this
+  sprintPerSec: 16,
+  hangPerSec: 7,
+  liftPerSec: 9,
+  jump: 5,
+  punch: 4,
+  kick: 9,
+  headbutt: 7,
+  dive: 22,
+  climb: 14,
+  struggle: 2,
+};
+
+export const KICK = {
+  windup: 0.1,
+  strike: 0.17,
+  recover: 0.22,
+  footSpeed: 12,
+  minHitSpeed: 3,
+  knockbackBase: 30,
+  knockbackPerSpeed: 3,
+  dazeScale: 0.75,
+  selfBalanceCost: 0.15,
+};
+
+export const HEADBUTT = {
+  windup: 0.13,
+  strike: 0.16,
+  recover: 0.22,
+  headSpeed: 9,
+  minHitSpeed: 2.5,
+  knockbackBase: 12,
+  knockbackPerSpeed: 2,
+  headDazeScale: 1.7,
+  bodyDazeScale: 1,
+  selfDaze: 5,
+};
+
+export const DIVE = {
+  boost: 2.6, // added to current run speed
+  minSpeed: 4.2,
+  maxSpeed: 9.5,
+  lift: 3.4, // upward launch from the ground
+  maxAirTime: 1.0, // can still dive this long after leaving the ground (jumping tackle)
+  minHitSpeed: 3,
+  knockbackBase: 26,
+  knockbackPerSpeed: 2.5,
+  victimStun: 0.95,
+  daze: 10,
+  landStun: 0.55, // diver is left lying on the floor
+  maxDuration: 1.3,
+};
+
+export const CLIMB = {
+  forward: 2.6,
+  extraHeight: 0.78, // pelvis ends this far above the grip
+  minHeight: 0.6,
+  minVy: 4,
+  maxVy: 9.5,
+};
+
+export const PROPS = {
+  hitMinSpeed: 6,
+  hitScale: 0.14, // strength per (m/s * kg)
+  thrownCredit: 3, // seconds a thrown prop counts as the thrower's attack
+};

@@ -42,9 +42,9 @@ export type StaticPiece = StaticBox | StaticCylinder;
 
 export interface PropDef {
   id: string;
-  shape: 'crate' | 'barrel' | 'cone';
+  shape: 'crate' | 'barrel' | 'cone' | 'ball';
   pos: Vec3;
-  half: Vec3; // crate half extents; barrel: x=radius, y=halfHeight
+  half: Vec3; // crate half extents; barrel/cone: x=radius, y=halfHeight; ball: x=radius
   mass: number;
   color: number;
 }
@@ -140,6 +140,7 @@ export const TEST_ARENA: ArenaDef = {
     { id: 'crate2', shape: 'crate', pos: { x: -1.7, y: 1.05, z: 2.85 }, half: { x: 0.3, y: 0.3, z: 0.3 }, mass: 5, color: 0xd9a066 },
     { id: 'crate3', shape: 'crate', pos: { x: 2.6, y: 0.35, z: -3.4 }, half: { x: 0.35, y: 0.35, z: 0.35 }, mass: 7, color: 0xc98a4b },
     { id: 'barrel1', shape: 'barrel', pos: { x: -6.4, y: 0.45, z: 3.6 }, half: { x: 0.3, y: 0.45, z: 0.3 }, mass: 9, color: 0x2f7fd1 },
+    { id: 'ball1', shape: 'ball', pos: { x: 2.6, y: 0.32, z: 2.4 }, half: { x: 0.3, y: 0.3, z: 0.3 }, mass: 1.2, color: 0xff4f6d },
     { id: 'cone1', shape: 'cone', pos: { x: -0.4, y: 0.3, z: -3.6 }, half: { x: 0.22, y: 0.3, z: 0.22 }, mass: 1.5, color: 0xff6a1a },
   ],
   spawns: [

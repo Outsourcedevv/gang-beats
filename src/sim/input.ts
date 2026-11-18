@@ -9,6 +9,9 @@ export interface PlayerInput {
   grab: boolean;
   lift: boolean;
   sprint: boolean;
+  kick: boolean;
+  headbutt: boolean;
+  dive: boolean;
 }
 
 export const emptyInput = (): PlayerInput => ({
@@ -19,6 +22,9 @@ export const emptyInput = (): PlayerInput => ({
   grab: false,
   lift: false,
   sprint: false,
+  kick: false,
+  headbutt: false,
+  dive: false,
 });
 
 export function copyInput(dst: PlayerInput, src: PlayerInput): void {
@@ -29,4 +35,7 @@ export function copyInput(dst: PlayerInput, src: PlayerInput): void {
   dst.grab = src.grab;
   dst.lift = src.lift;
   dst.sprint = src.sprint;
+  dst.kick = src.kick;
+  dst.headbutt = src.headbutt;
+  dst.dive = src.dive;
 }

@@ -1,6 +1,6 @@
 import { initPhysics } from '../sim/physics';
 import { Game } from './game';
-import { InputManager } from './input/devices';
+import { ACTIONS, InputManager } from './input/devices';
 import { Sfx } from './audio/sfx';
 import { UI } from './ui/ui';
 import { loadSettings } from './storage';
@@ -10,7 +10,18 @@ async function boot(): Promise<void> {
   const settings = loadSettings();
   const app = document.getElementById('app')!;
   const input = new InputManager(app);
-  if (settings.bindings) input.bindings = settings.bindings;
+  if (settings.bindings) {
+    // Merge saved bindings with defaults so newly added actions get keys.
+    for (const scheme of ['kbA', 'kbB'] as const) {
+      const saved = settings.bindings[scheme] ?? {};
+      const used = new Set(Object.values(saved).flat());
+      for (const action of ACTIONS) {
+        const keys = saved[action];
+        // New actions get their default keys, minus any the player already uses elsewhere.
+        input.bindings[scheme][action] = keys ?? input.bindings[scheme][action].filter((k) => !used.has(k));
+      }
+    }
+  }
   input.mouseEnabled = settings.mouseControls;
   const sfx = new Sfx();
   sfx.setVolume(settings.volume);

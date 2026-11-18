@@ -20,7 +20,7 @@ function softMat(color: number): THREE.MeshPhysicalMaterial {
   });
 }
 
-type Expression = 'normal' | 'effort' | 'hurt' | 'dazed' | 'ko' | 'scared';
+type Expression = 'normal' | 'effort' | 'hurt' | 'dazed' | 'ko' | 'scared' | 'tired';
 
 /**
  * Visual representation of one ragdoll character: one mesh group per body part,
@@ -38,6 +38,7 @@ export class CharacterView {
   private brows: THREE.Mesh[] = [];
   private mouth!: THREE.Mesh;
   private stars: THREE.Sprite[] = [];
+  private sweat!: THREE.Mesh;
   private squash = 0;
   private squashVel = 0;
   private blinkTimer = 2;
@@ -62,6 +63,14 @@ export class CharacterView {
     this.buildFace();
     this.buildHat();
     this.buildStars();
+    this.sweat = new THREE.Mesh(
+      new THREE.SphereGeometry(0.05, 10, 8),
+      new THREE.MeshStandardMaterial({ color: 0x8fd6ff, roughness: 0.1, transparent: true, opacity: 0.85 }),
+    );
+    this.sweat.scale.set(0.8, 1.3, 0.8);
+    this.sweat.position.set(-0.24, 0.16, 0.16);
+    this.sweat.visible = false;
+    this.head.add(this.sweat);
   }
 
   private partMesh(
@@ -299,6 +308,7 @@ export class CharacterView {
     if (c.hurtTimer > 0) return 'hurt';
     if (c.effort > 0.5) return 'effort';
     if (c.airTime > 0.6 || c.liftedBy >= 0) return 'scared';
+    if (c.exhausted) return 'tired';
     if (c.daze > 45) return 'dazed';
     return 'normal';
   }
@@ -347,7 +357,14 @@ export class CharacterView {
         mouthOpen = 0.8;
         mouthW = 1.3;
         break;
+      case 'tired':
+        eyeY = baseY * 0.4;
+        mouthOpen = 0.6 + Math.sin(this.time * 9) * 0.3;
+        mouthW = 1.1;
+        break;
     }
+    this.sweat.visible = e === 'tired' || (e === 'effort' && c.stamina < 35);
+    if (this.sweat.visible) this.sweat.position.y = 0.16 - ((this.time * 0.5) % 1) * 0.15;
     const ko = e === 'ko';
     for (let i = 0; i < 2; i++) {
       this.eyes[i].visible = !ko;

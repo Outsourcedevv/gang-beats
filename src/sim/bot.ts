@@ -22,6 +22,7 @@ export class Bot {
   private wobble = 0;
   private stuckTimer = 0;
   private mashTimer = 0;
+  private hangTimer = 0;
 
   constructor(
     readonly index: number,
@@ -37,6 +38,10 @@ export class Bot {
     const me = sim.characters[this.index];
     inp.jump = false;
     inp.punch = false;
+    inp.kick = false;
+    inp.headbutt = false;
+    inp.dive = false;
+    inp.sprint = false;
     inp.moveX = 0;
     inp.moveZ = 0;
     if (!me || !me.alive) return inp;
@@ -68,6 +73,26 @@ export class Bot {
     const tgt = sim.characters[this.target];
 
     const holdingChar = me.arms.some((a) => a.joint && a.grabOwner?.kind === 'char');
+
+    // Flying / falling: grab for any ledge, then haul up.
+    if (!me.grounded && me.airTime > 0.3 && this.mode !== 'carry') {
+      inp.grab = true;
+      inp.lift = false;
+      if (me.envGrips() > 0) {
+        this.hangTimer += dt;
+        if (this.hangTimer > 0.35 + this.rng() * 0.3) {
+          inp.jump = true;
+          this.hangTimer = 0;
+        }
+      } else this.hangTimer = 0;
+      const cx = (b.minX + b.maxX) / 2 - pos.x;
+      const cz = (b.minZ + b.maxZ) / 2 - pos.z;
+      const l = Math.hypot(cx, cz) || 1;
+      inp.moveX = cx / l;
+      inp.moveZ = cz / l;
+      return inp;
+    }
+    this.hangTimer = 0;
 
     // Being held: wriggle and mash to break free.
     if (me.heldBy(sim).length) {
@@ -141,6 +166,14 @@ export class Bot {
       inp.grab = false;
       inp.lift = false;
       this.grabTimer = 0;
+      // Run when far and fresh; save stamina otherwise.
+      inp.sprint = d > 3.5 && me.stamina > 45 && !me.exhausted;
+      // Flying tackle from mid range, sometimes.
+      if (d > 1.6 && d < 2.6 && tgt.state === 'active' && me.stamina > 50 && this.rng() < 0.012 * this.aggression) {
+        inp.moveX = nx;
+        inp.moveZ = nz;
+        inp.dive = true;
+      }
       // Unstick: jump if we're not getting anywhere.
       const v = me.part('pelvis').body.linvel();
       if (Math.hypot(v.x, v.z) < 0.4) this.stuckTimer += dt;
@@ -170,7 +203,12 @@ export class Bot {
           inp.lift = false;
         }
       } else if (this.punchCd <= 0) {
-        inp.punch = true;
+        // Mix up the attacks; specials only when there's stamina to spare.
+        const r = this.rng();
+        const fresh = me.stamina > 30 && !me.exhausted;
+        if (fresh && r < 0.18) inp.kick = true;
+        else if (fresh && r < 0.27) inp.headbutt = true;
+        else inp.punch = true;
         this.punchCd = (0.4 + this.rng() * 0.6) / (0.5 + this.aggression);
         if (this.rng() < 0.08 * this.aggression) this.grabTimer = 0.01;
       }

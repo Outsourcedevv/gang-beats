@@ -14,8 +14,8 @@ export const DEVICE_LABELS: Record<DeviceId, string> = {
   off: 'Empty',
 };
 
-export type Action = 'up' | 'down' | 'left' | 'right' | 'jump' | 'punch' | 'grab' | 'lift' | 'sprint';
-export const ACTIONS: Action[] = ['up', 'down', 'left', 'right', 'jump', 'punch', 'grab', 'lift', 'sprint'];
+export type Action = 'up' | 'down' | 'left' | 'right' | 'jump' | 'punch' | 'grab' | 'lift' | 'kick' | 'headbutt' | 'dive' | 'sprint';
+export const ACTIONS: Action[] = ['up', 'down', 'left', 'right', 'jump', 'punch', 'grab', 'lift', 'kick', 'headbutt', 'dive', 'sprint'];
 export const ACTION_LABELS: Record<Action, string> = {
   up: 'Move up',
   down: 'Move down',
@@ -25,6 +25,9 @@ export const ACTION_LABELS: Record<Action, string> = {
   punch: 'Punch',
   grab: 'Grab (hold)',
   lift: 'Lift / raise arms (hold)',
+  kick: 'Kick',
+  headbutt: 'Headbutt',
+  dive: 'Dive / tackle',
   sprint: 'Sprint',
 };
 
@@ -41,6 +44,9 @@ export const DEFAULT_BINDINGS: Record<'kbA' | 'kbB', KeyBindings> = {
     punch: ['KeyJ', 'KeyF'],
     grab: ['KeyK', 'KeyG'],
     lift: ['KeyL', 'KeyR'],
+    kick: ['KeyI', 'KeyE'],
+    headbutt: ['KeyO', 'KeyQ'],
+    dive: ['KeyU', 'KeyC'],
     sprint: ['ShiftLeft'],
   },
   kbB: {
@@ -52,6 +58,9 @@ export const DEFAULT_BINDINGS: Record<'kbA' | 'kbB', KeyBindings> = {
     punch: ['Numpad1', 'Period'],
     grab: ['Numpad2', 'Slash'],
     lift: ['Numpad3', 'Quote'],
+    kick: ['Numpad4', 'Comma'],
+    headbutt: ['Numpad5', 'KeyM'],
+    dive: ['Numpad6', 'KeyN'],
     sprint: ['NumpadDecimal', 'ControlRight'],
   },
 };
@@ -70,6 +79,7 @@ export function keyLabel(code: string): string {
     Slash: '/',
     Quote: "'",
     Comma: ',',
+    KeyM: 'M',
     Semicolon: ';',
     NumpadDecimal: 'Num .',
   };
@@ -78,7 +88,8 @@ export function keyLabel(code: string): string {
   return code;
 }
 
-const GAMEPAD = { jump: [0], punch: [2], grab: [7, 5], lift: [6, 4], sprint: [10, 1] };
+// Standard mapping: A jump, X punch, B kick, Y headbutt, RT grab, LT lift, RB dive, LB / L3 sprint.
+const GAMEPAD = { jump: [0], punch: [2], kick: [1], headbutt: [3], grab: [7], lift: [6], dive: [5], sprint: [4, 10] };
 const DEADZONE = 0.22;
 
 /**
@@ -153,6 +164,9 @@ export class InputManager {
       inp.grab = this.key(b.grab);
       inp.lift = this.key(b.lift);
       inp.sprint = this.key(b.sprint);
+      inp.kick = this.key(b.kick);
+      inp.headbutt = this.key(b.headbutt);
+      inp.dive = this.key(b.dive);
       if (device === 'kbA' && this.mouseEnabled) {
         inp.punch ||= this.mouse.has(0) || this.mouseLatched.has(0);
         inp.grab ||= this.mouse.has(2);
@@ -185,6 +199,9 @@ export class InputManager {
         inp.grab = btn(GAMEPAD.grab);
         inp.lift = btn(GAMEPAD.lift);
         inp.sprint = btn(GAMEPAD.sprint);
+        inp.kick = btn(GAMEPAD.kick);
+        inp.headbutt = btn(GAMEPAD.headbutt);
+        inp.dive = btn(GAMEPAD.dive);
         if (pad.buttons[9]?.pressed) this.padPause(Number(device.slice(3)));
       }
     }

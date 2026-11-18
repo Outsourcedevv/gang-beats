@@ -1,4 +1,5 @@
 import type { Vec3 } from './math';
+import type { EliminationCause } from './arena';
 
 export type AttackKind = 'punch' | 'kick' | 'headbutt' | 'dive' | 'prop';
 
@@ -22,7 +23,19 @@ export type SimEvent =
   | { type: 'impact'; char: number; pos: Vec3; strength: number }
   | { type: 'topple'; char: number }
   | { type: 'escape'; char: number }
-  | { type: 'eliminated'; char: number }
+  | { type: 'eliminated'; char: number; cause: EliminationCause; pos: Vec3 }
+  | { type: 'warning'; text: string }
+  | { type: 'swerve'; dir: number }
+  | { type: 'gust'; dir: Vec3 }
+  | { type: 'sweepWarning'; mover: string }
+  | { type: 'drop'; pos: Vec3 }
+  | { type: 'creak'; pos: Vec3 }
+  | { type: 'shatter'; pos: Vec3; half: Vec3 }
+  | { type: 'break'; pos: Vec3 }
+  | { type: 'bounce'; char: number; pos: Vec3 }
+  | { type: 'crush'; char: number; pos: Vec3 }
+  | { type: 'timeUp' }
+  | { type: 'arenaChange'; arena: string }
   | { type: 'roundStart'; round: number }
   | { type: 'fight' }
   | { type: 'roundEnd'; winner: number }

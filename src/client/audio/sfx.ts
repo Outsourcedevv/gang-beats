@@ -210,33 +210,170 @@ export class Sfx {
     this.tone('square', 900, 600, 0.05, 0.05);
   }
 
-  /** Rooftop wind + distant city hum, looping quietly. */
-  startAmbience(): void {
-    if (!this.ctx || this.ambience.length) return;
-    const ctx = this.ctx;
+  // ------------------------------------------------------------- map sounds
+  shatter(): void {
+    if (!this.ctx) return;
+    this.noise(0.5, 'highpass', 3000, 6000, 0.35, 0.7);
+    for (let i = 0; i < 7; i++) this.tone('sine', 2500 + Math.random() * 3000, 2000 + Math.random() * 2000, 0.12, 0.05, 0.04 + i * 0.05);
+  }
+
+  crack(): void {
+    if (!this.ctx || !this.throttle('crack', 60)) return;
+    this.noise(0.09, 'bandpass', 1400, 500, 0.45, 1.4);
+    this.tone('square', 140, 60, 0.12, 0.08);
+  }
+
+  creak(): void {
+    if (!this.ctx || !this.throttle('creak', 200)) return;
+    this.tone('sawtooth', 90, 130, 0.5, 0.05, 0, 0.1);
+    this.noise(0.4, 'bandpass', 500, 700, 0.06, 8);
+  }
+
+  whistle(): void {
+    if (!this.ctx || !this.throttle('whistle', 300)) return;
+    this.tone('sine', 1800, 700, 0.7, 0.06, 0, 0.05);
+  }
+
+  boing(): void {
+    if (!this.ctx || !this.throttle('boing', 120)) return;
+    this.tone('sine', 180, 520, 0.35, 0.3);
+    this.tone('triangle', 260, 700, 0.3, 0.12, 0.02);
+  }
+
+  crush(): void {
+    if (!this.ctx) return;
+    this.tone('sine', 70, 30, 0.4, 0.8);
+    this.noise(0.6, 'lowpass', 2500, 200, 0.5);
+    this.noise(0.7, 'highpass', 3000, 5000, 0.08, 0.5, 0.15);
+  }
+
+  grind(): void {
+    if (!this.ctx) return;
+    this.tone('sawtooth', 120, 90, 0.9, 0.12);
+    this.noise(0.9, 'bandpass', 900, 2500, 0.35, 1.5);
+  }
+
+  splash(): void {
+    if (!this.ctx) return;
+    this.noise(0.7, 'lowpass', 2500, 300, 0.5);
+    this.tone('sine', 400, 140, 0.25, 0.12);
+  }
+
+  sizzle(): void {
+    if (!this.ctx) return;
+    this.noise(1.2, 'highpass', 2500, 4000, 0.35, 0.5);
+  }
+
+  truckHorn(): void {
+    if (!this.ctx || !this.throttle('horn', 800)) return;
+    this.tone('sawtooth', 185, 180, 0.5, 0.12, 0, 0.03);
+    this.tone('sawtooth', 233, 228, 0.5, 0.1, 0, 0.03);
+  }
+
+  gust(): void {
+    if (!this.ctx) return;
+    this.noise(1.4, 'bandpass', 300, 900, 0.25, 0.8);
+  }
+
+  // -------------------------------------------------------------- ambience
+  private ambienceTheme = 'sunset-rooftop';
+  private ambienceTimer: ReturnType<typeof setInterval> | null = null;
+
+  /** Choose the ambient bed for a map theme (restarts it if already playing). */
+  setAmbience(theme: string): void {
+    if (theme === this.ambienceTheme) return;
+    this.ambienceTheme = theme;
+    if (this.ambience.length) {
+      this.stopAmbience();
+      this.startAmbience();
+    }
+  }
+
+  stopAmbience(): void {
+    for (const n of this.ambience) {
+      try {
+        (n as AudioScheduledSourceNode).stop?.();
+      } catch {
+        // already stopped
+      }
+      n.disconnect();
+    }
+    this.ambience = [];
+    if (this.ambienceTimer) clearInterval(this.ambienceTimer);
+    this.ambienceTimer = null;
+  }
+
+  private loopNoise(type: BiquadFilterType, freq: number, gain: number, lfoRate = 0, lfoDepth = 0): void {
+    const ctx = this.ctx!;
     const src = ctx.createBufferSource();
     src.buffer = this.noiseBuf;
     src.loop = true;
+    const f = ctx.createBiquadFilter();
+    f.type = type;
+    f.frequency.value = freq;
+    const g = ctx.createGain();
+    g.gain.value = gain;
+    src.connect(f).connect(g).connect(this.master!);
+    src.start();
+    this.ambience.push(src, g);
+    if (lfoRate) {
+      const lfo = ctx.createOscillator();
+      lfo.frequency.value = lfoRate;
+      const lg = ctx.createGain();
+      lg.gain.value = lfoDepth;
+      lfo.connect(lg).connect(g.gain);
+      lfo.start();
+      this.ambience.push(lfo, lg);
+    }
+  }
+
+  private loopTone(type: OscillatorType, freq: number, gain: number): void {
+    const ctx = this.ctx!;
+    const o = ctx.createOscillator();
+    o.type = type;
+    o.frequency.value = freq;
     const lp = ctx.createBiquadFilter();
     lp.type = 'lowpass';
-    lp.frequency.value = 420;
+    lp.frequency.value = 300;
     const g = ctx.createGain();
-    g.gain.value = 0.05;
-    const lfo = ctx.createOscillator();
-    lfo.frequency.value = 0.12;
-    const lfoGain = ctx.createGain();
-    lfoGain.gain.value = 0.03;
-    lfo.connect(lfoGain).connect(g.gain);
-    src.connect(lp).connect(g).connect(this.master!);
-    src.start();
-    lfo.start();
-    const hum = ctx.createOscillator();
-    hum.type = 'sine';
-    hum.frequency.value = 55;
-    const hg = ctx.createGain();
-    hg.gain.value = 0.015;
-    hum.connect(hg).connect(this.master!);
-    hum.start();
-    this.ambience.push(src, lfo, hum);
+    g.gain.value = gain;
+    o.connect(lp).connect(g).connect(this.master!);
+    o.start();
+    this.ambience.push(o, g);
+  }
+
+  /** Start the ambient bed for the current theme, quietly. */
+  startAmbience(): void {
+    if (!this.ctx || this.ambience.length) return;
+    switch (this.ambienceTheme) {
+      case 'factory': {
+        this.loopTone('sawtooth', 48, 0.05);
+        this.loopNoise('lowpass', 300, 0.03);
+        this.ambienceTimer = setInterval(() => {
+          if (Math.random() < 0.5) this.tone('square', 220 + Math.random() * 80, 120, 0.15, 0.03);
+          else this.noise(0.12, 'bandpass', 2200, 1400, 0.05, 3);
+        }, 1700);
+        break;
+      }
+      case 'highway':
+        this.loopNoise('lowpass', 160, 0.12);
+        this.loopNoise('bandpass', 700, 0.04, 0.2, 0.02);
+        break;
+      case 'funfair': {
+        this.loopNoise('lowpass', 500, 0.05, 0.11, 0.04);
+        // A wonky fairground waltz, very quietly.
+        const notes = [523, 659, 784, 659, 587, 698, 880, 698, 523, 659, 784, 1047, 988, 784, 659, 587];
+        let i = 0;
+        this.ambienceTimer = setInterval(() => {
+          const f = notes[i++ % notes.length] * (1 + (Math.random() - 0.5) * 0.01);
+          this.tone('triangle', f, f, 0.32, 0.035);
+          if (i % 3 === 1) this.tone('sine', notes[(i + 8) % notes.length] / 4, notes[(i + 8) % notes.length] / 4, 0.4, 0.03);
+        }, 260);
+        break;
+      }
+      default:
+        this.loopNoise('lowpass', 420, 0.05, 0.12, 0.03);
+        this.loopTone('sine', 55, 0.015);
+    }
   }
 }

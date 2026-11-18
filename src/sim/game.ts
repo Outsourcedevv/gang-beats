@@ -1,16 +1,19 @@
 import type RAPIER_NS from '@dimforge/rapier3d-compat';
-import { RAPIER, envGroups, propGroups, MAX_CHARACTERS } from './physics';
+import { RAPIER, propGroups, MAX_CHARACTERS } from './physics';
 import { COMBAT, DIVE, HEADBUTT, KICK, PHYSICS, PROPS } from './config';
-import type { ArenaDef, PropDef } from './arena';
+import type { ArenaDef, EliminationCause, PropDef } from './arena';
+import { ArenaRuntime } from './arenaRuntime';
+import type { ArenaHost } from './arenaRuntime';
 import { Character } from './character';
 import type { Owner, SimContext } from './character';
 import type { AttackKind, SimEvent } from './events';
 import type { PlayerInput } from './input';
 import { emptyInput } from './input';
-import { clamp, makeRng, normalize, quatYaw, sub, len } from './math';
+import { clamp, makeRng, normalize, sub, len } from './math';
 import type { Vec3 } from './math';
 import { PART_COUNT, PART_INDEX } from './ragdoll';
 import { RoundRules } from './rules';
+import type { RulesResume } from './rules';
 
 type World = RAPIER_NS.World;
 type RigidBody = RAPIER_NS.RigidBody;
@@ -25,6 +28,10 @@ export interface Prop {
   velPre: Vec3;
   /** Per-victim time of the last hit this prop dealt (debounce). */
   lastHitAt: Map<number, number>;
+  /** False while a drop-pool prop is waiting to be dropped. */
+  active: boolean;
+  /** Part of the arena's drop pool (spawned by events). */
+  pool: boolean;
 }
 
 interface StrikeParams {
@@ -48,6 +55,10 @@ export interface SimOptions {
   seed?: number;
   /** Disable round rules (sandbox / tests). */
   sandbox?: boolean;
+  /** Continue a match (round number and scores) on a new arena. */
+  resume?: RulesResume;
+  /** Called when a new round is about to start; return a different arena to switch maps. */
+  nextArena?: (round: number) => ArenaDef | null;
 }
 
 /** Floats stored per body in a transform snapshot: position (3) + quaternion (4). */
@@ -58,7 +69,7 @@ export const SNAP_STRIDE = 7;
  * resolution and round rules. Contains no rendering code so it can run in
  * Node for tests and (later) on the multiplayer server.
  */
-export class GameSim implements SimContext {
+export class GameSim implements SimContext, ArenaHost {
   readonly world: World;
   readonly arena: ArenaDef;
   readonly characters: Character[] = [];
@@ -74,7 +85,17 @@ export class GameSim implements SimContext {
   private eventQueue: RAPIER_NS.EventQueue;
   private colliderOwner = new Map<number, Owner>();
   private bodyOwner = new Map<number, Owner>();
-  /** Interpolation snapshots: characters' parts first, then props. */
+  readonly runtime: ArenaRuntime;
+  readonly killY: number;
+  readonly killCause: EliminationCause;
+  /** Set when the rules want the next round on another arena; the host rebuilds the sim. */
+  pendingArena: { arena: ArenaDef; resume: RulesResume } | null = null;
+  readonly nextArena: SimOptions['nextArena'];
+  /** Bodies in snapshot order: characters' parts, props, movers, breakables. */
+  private snapBodies: RigidBody[] = [];
+  private moverBase = 0;
+  private breakableBase = 0;
+  /** Interpolation snapshots (see snapBodies). */
   prevSnap: Float32Array;
   currSnap: Float32Array;
 
@@ -86,8 +107,12 @@ export class GameSim implements SimContext {
     this.world.timestep = this.dt;
     this.world.numSolverIterations = PHYSICS.solverIterations;
     this.eventQueue = new RAPIER.EventQueue(true);
+    this.killY = opts.arena.killY ?? PHYSICS.killY;
+    this.killCause = opts.arena.killCause ?? 'fall';
+    this.nextArena = opts.nextArena;
 
-    this.buildArena();
+    this.runtime = new ArenaRuntime(this, this.arena);
+    this.buildProps();
     for (let i = 0; i < opts.players; i++) {
       const sp = this.spawnFor(i);
       const c = new Character(this.world, i, sp.pos, sp.yaw);
@@ -98,38 +123,49 @@ export class GameSim implements SimContext {
         this.bodyOwner.set(p.body.handle, o);
       }
     }
-    const n = this.characters.length * PART_COUNT + this.props.length;
+    for (const c of this.characters) for (const p of c.rag.parts) this.snapBodies.push(p.body);
+    for (const p of this.props) this.snapBodies.push(p.body);
+    this.moverBase = this.snapBodies.length;
+    for (const m of this.runtime.movers) this.snapBodies.push(m.body);
+    this.breakableBase = this.snapBodies.length;
+    for (const b of this.runtime.breakables) this.snapBodies.push(b.body);
+    const n = this.snapBodies.length;
     this.prevSnap = new Float32Array(n * SNAP_STRIDE);
     this.currSnap = new Float32Array(n * SNAP_STRIDE);
     this.writeSnapshot(this.currSnap);
     this.prevSnap.set(this.currSnap);
-    this.rules = new RoundRules(this, !!opts.sandbox);
+    this.rules = new RoundRules(this, !!opts.sandbox, opts.resume);
   }
 
-  private buildArena(): void {
-    const fixed = this.world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
-    for (const piece of this.arena.pieces) {
-      if (piece.visualOnly) continue;
-      let desc: RAPIER_NS.ColliderDesc;
-      if (piece.kind === 'box') {
-        desc = RAPIER.ColliderDesc.cuboid(piece.half.x, piece.half.y, piece.half.z);
-        if (piece.yaw) desc.setRotation(quatYaw(piece.yaw));
-        desc.setFriction(piece.friction ?? 0.8);
-      } else {
-        desc = RAPIER.ColliderDesc.cylinder(piece.halfHeight, piece.radius).setFriction(0.8);
-      }
-      desc.setTranslation(piece.pos.x, piece.pos.y, piece.pos.z).setCollisionGroups(envGroups());
-      const c = this.world.createCollider(desc, fixed);
-      this.colliderOwner.set(c.handle, { kind: 'env' });
-    }
-    this.bodyOwner.set(fixed.handle, { kind: 'env' });
+  registerCollider(c: RAPIER_NS.Collider, owner: Owner): void {
+    this.colliderOwner.set(c.handle, owner);
+  }
 
-    this.arena.props.forEach((def, index) => {
+  registerBody(b: RigidBody, owner: Owner): void {
+    this.bodyOwner.set(b.handle, owner);
+  }
+
+  surfaceVelocity(collider: RAPIER_NS.Collider): Vec3 | null {
+    return this.runtime.surfaceVelocity(collider);
+  }
+
+  /** Seconds into the current fight, or null while the arena should be idle. */
+  arenaClock(): number | null {
+    const ph = this.rules.phase;
+    if (ph === 'fight') return this.rules.roundTime;
+    if (ph === 'sandbox') return this.time;
+    return null;
+  }
+
+  private buildProps(): void {
+    const all = [...this.arena.props.map((d) => ({ d, pool: false })), ...(this.arena.dropPool ?? []).map((d) => ({ d, pool: true }))];
+    all.forEach(({ d: def, pool }, index) => {
       const body = this.world.createRigidBody(
         RAPIER.RigidBodyDesc.dynamic()
           .setTranslation(def.pos.x, def.pos.y, def.pos.z)
           .setLinearDamping(0.1)
-          .setAngularDamping(0.4),
+          .setAngularDamping(0.4)
+          .setEnabled(!pool),
       );
       let desc: RAPIER_NS.ColliderDesc;
       if (def.shape === 'crate') desc = RAPIER.ColliderDesc.roundCuboid(def.half.x - 0.03, def.half.y - 0.03, def.half.z - 0.03, 0.03);
@@ -137,14 +173,46 @@ export class GameSim implements SimContext {
       else if (def.shape === 'ball') desc = RAPIER.ColliderDesc.ball(def.half.x);
       else desc = RAPIER.ColliderDesc.cone(def.half.y, def.half.x);
       const bouncy = def.shape === 'ball';
-      desc.setMass(def.mass).setFriction(bouncy ? 0.5 : 0.7).setRestitution(bouncy ? 0.65 : 0.15).setCollisionGroups(propGroups());
+      desc
+        .setMass(def.mass)
+        .setFriction(bouncy ? 0.5 : 0.7)
+        .setRestitution(bouncy ? 0.65 : 0.15)
+        .setCollisionGroups(propGroups())
+        .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
       const c = this.world.createCollider(desc, body);
       const o: Owner = { kind: 'prop', index };
       this.colliderOwner.set(c.handle, o);
       this.bodyOwner.set(body.handle, o);
-      this.props.push({ index, def, body, lastThrower: -1, thrownAt: -99, velPre: { x: 0, y: 0, z: 0 }, lastHitAt: new Map() });
+      this.props.push({ index, def, body, lastThrower: -1, thrownAt: -99, velPre: { x: 0, y: 0, z: 0 }, lastHitAt: new Map(), active: !pool, pool });
       this.propBodies.push(body);
     });
+  }
+
+  /** Bring a (drop-pool) prop into play at `pos`. */
+  activateProp(index: number, pos: Vec3, vel: Vec3): void {
+    const p = this.props[index];
+    if (!p) return;
+    for (const c of this.characters) for (const a of c.arms) if (a.grabBody === p.body) c.release(this, a);
+    p.active = true;
+    p.body.setEnabled(true);
+    p.body.setTranslation(pos, true);
+    p.body.setRotation({ x: 0, y: 0, z: 0, w: 1 }, true);
+    p.body.setLinvel(vel, true);
+    p.body.setAngvel({ x: this.rng() - 0.5, y: this.rng() - 0.5, z: this.rng() - 0.5 }, true);
+    p.lastThrower = -1;
+    p.thrownAt = -99;
+  }
+
+  /** A prop that left play: pool props go back to the pool, others respawn. */
+  recycleProp(index: number): void {
+    const p = this.props[index];
+    if (!p) return;
+    if (p.pool) {
+      for (const c of this.characters) for (const a of c.arms) if (a.grabBody === p.body) c.release(this, a);
+      p.active = false;
+      p.body.setEnabled(false);
+      p.body.setTranslation(p.def.pos, false);
+    } else this.resetProp(p);
   }
 
   spawnFor(i: number): { pos: Vec3; yaw: number } {
@@ -160,6 +228,7 @@ export class GameSim implements SimContext {
 
   emit(ev: SimEvent): void {
     if (ev.type === 'throw' && ev.prop !== undefined) this.creditProp(ev.prop, ev.char);
+    if (ev.type === 'land') this.runtime?.onLanding(this.characters[ev.char]?.standingOn() ?? null, ev.strength);
     this.events.push(ev);
   }
 
@@ -186,6 +255,7 @@ export class GameSim implements SimContext {
       if (inp && canAct) c.setInput(inp);
       else c.setInput(emptyInput());
     }
+    this.runtime.preStep(this.dt);
     for (const c of this.characters) c.preStep(this, this.dt);
     for (const c of this.characters) c.capturePreStep();
     for (const p of this.props) {
@@ -205,8 +275,11 @@ export class GameSim implements SimContext {
       this.checkStrike(h2, h1);
       this.checkPropHit(h1, h2);
       this.checkPropHit(h2, h1);
+      this.checkBreakable(h1, h2);
+      this.checkBreakable(h2, h1);
     });
     for (const c of this.characters) c.postStep(this);
+    this.runtime.postStep();
     this.recycleFallenProps();
     this.rules.update(this.dt);
     this.writeSnapshot(this.currSnap);
@@ -265,6 +338,16 @@ export class GameSim implements SimContext {
     this.emit({ type: 'hit', attacker: attacker.index, victim: victim.index, pos: hitPos, strength, head: isHead, kind: strike.kind });
   }
 
+  /** Something slammed into breakable `a` (glass, planks): pass its pre-impact velocity on. */
+  private checkBreakable(a: number, b: number): void {
+    if (!this.runtime.breakableFor(a)) return;
+    const ob = this.colliderOwner.get(b);
+    let v: Vec3 | null = null;
+    if (ob?.kind === 'char') v = this.characters[ob.index].partVelPre[PART_INDEX[ob.part]];
+    else if (ob?.kind === 'prop') v = this.props[ob.index].velPre;
+    this.runtime.onCollision(a, v);
+  }
+
   /** A fast-moving prop (thrown crate, kicked barrel…) slamming into a fighter. */
   private checkPropHit(a: number, b: number): void {
     const oa = this.colliderOwner.get(a);
@@ -291,12 +374,16 @@ export class GameSim implements SimContext {
   /** Props that fall off the map respawn at their original spot. */
   private recycleFallenProps(): void {
     for (const p of this.props) {
-      if (p.body.translation().y < PHYSICS.killY) this.resetProp(p);
+      if (p.active && p.body.translation().y < this.killY - 1) this.recycleProp(p.index);
     }
   }
 
   private resetProp(p: Prop): void {
     for (const c of this.characters) for (const a of c.arms) if (a.grabBody === p.body) c.release(this, a);
+    if (p.pool) {
+      p.active = false;
+      p.body.setEnabled(false);
+    }
     p.body.setTranslation(p.def.pos, true);
     p.body.setRotation({ x: 0, y: 0, z: 0, w: 1 }, true);
     p.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
@@ -311,6 +398,7 @@ export class GameSim implements SimContext {
       c.reset(this.world, sp.pos, sp.yaw);
     });
     for (const p of this.props) this.resetProp(p);
+    this.runtime.reset();
     this.writeSnapshot(this.currSnap);
     this.prevSnap.set(this.currSnap);
   }
@@ -329,8 +417,7 @@ export class GameSim implements SimContext {
       out[o + 6] = r.w;
       o += SNAP_STRIDE;
     };
-    for (const c of this.characters) for (const p of c.rag.parts) put(p.body);
-    for (const p of this.props) put(p.body);
+    for (const b of this.snapBodies) put(b);
   }
 
   /** Offset (in floats) of a character part within the snapshot buffers. */
@@ -340,6 +427,14 @@ export class GameSim implements SimContext {
 
   propOffset(propIndex: number): number {
     return (this.characters.length * PART_COUNT + propIndex) * SNAP_STRIDE;
+  }
+
+  moverOffset(i: number): number {
+    return (this.moverBase + i) * SNAP_STRIDE;
+  }
+
+  breakableOffset(i: number): number {
+    return (this.breakableBase + i) * SNAP_STRIDE;
   }
 
   dispose(): void {

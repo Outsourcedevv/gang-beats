@@ -14,18 +14,31 @@ export type SurfaceStyle =
   | 'wood'
   | 'pipe'
   | 'glass'
-  | 'trim';
+  | 'trim'
+  | 'belt' // conveyor belt (texture scrolls with surfaceVel)
+  | 'grating'
+  | 'hazard' // yellow/black stripes
+  | 'rubber'
+  | 'plank'
+  | 'rotten'
+  | 'paint' // plain painted surface, uses `color`
+  | 'deck' // truck flatbed
+  | 'glow'; // emissive (lava, neon)
 
 export interface StaticBox {
   kind: 'box';
   pos: Vec3;
   half: Vec3;
   yaw?: number;
+  /** Rotation about Z (applied after yaw). */
+  roll?: number;
   style: SurfaceStyle;
   color?: number;
   friction?: number;
   /** Visual-only pieces are rendered but have no collider. */
   visualOnly?: boolean;
+  /** Moving-surface velocity (conveyor belts): carries whatever stands on it. */
+  surfaceVel?: Vec3;
 }
 
 export interface StaticCylinder {
@@ -36,6 +49,8 @@ export interface StaticCylinder {
   style: SurfaceStyle;
   color?: number;
   visualOnly?: boolean;
+  /** Long axis (default y). */
+  axis?: 'x' | 'y' | 'z';
 }
 
 export type StaticPiece = StaticBox | StaticCylinder;
@@ -49,105 +64,114 @@ export interface PropDef {
   color: number;
 }
 
+export interface Box3 {
+  min: Vec3;
+  max: Vec3;
+}
+
+/** How a mover's pose changes over time. Offsets are relative to the mover's origin. */
+export type MoverMotion =
+  | { type: 'path'; points: Vec3[]; speed: number; pause?: number; mode: 'pingpong' | 'loop' }
+  | { type: 'spin'; axis: 'x' | 'y' | 'z'; speed: number }
+  | { type: 'swing'; axis: 'x' | 'z'; amplitude: number; period: number; phase?: number }
+  | { type: 'orbit'; axis: 'x' | 'z'; radius: number; period: number; phase?: number }
+  /** Slam to `offset`, hold, then rise back; repeats every `period`. */
+  | { type: 'piston'; offset: Vec3; period: number; slam: number; hold: number; rise: number; phase?: number }
+  /** One-way pass from `from` to `to`, triggered by an arena 'sweep' event. Parked at `from` otherwise. */
+  | { type: 'sweep'; from: Vec3; to: Vec3; speed: number }
+  | { type: 'sway'; amplitude: Vec3; period: number; phase?: number };
+
+export interface MoverDef {
+  id: string;
+  origin: Vec3;
+  /** Collision/visual pieces, positioned relative to the origin. */
+  parts: StaticPiece[];
+  motion: MoverMotion;
+  /** Knocks out fighters caught under this box (relative to the origin) while moving down. */
+  crush?: Box3;
+}
+
+export interface BreakableDef {
+  id: string;
+  piece: StaticBox;
+  /** impact: breaks when hit faster than `threshold` m/s. stand: gives way after `threshold` seconds of being stood on. manual: only arena events. */
+  trigger: 'impact' | 'stand' | 'manual';
+  threshold: number;
+  /** shatter: vanishes into shards. fall: comes loose and drops. */
+  mode: 'shatter' | 'fall';
+  mass?: number;
+}
+
+export type EliminationCause = 'fall' | 'water' | 'road' | 'grinder' | 'molten' | 'building';
+
+export type HazardDef =
+  | { kind: 'kill'; box: Box3; cause: EliminationCause }
+  | { kind: 'wind'; box: Box3; accel: Vec3; id?: string }
+  | { kind: 'bounce'; box: Box3; speed: number }
+  /** Drags anything resting in the box (conveyor belts carry knocked-out fighters too). */
+  | { kind: 'belt'; box: Box3; velocity: Vec3 };
+
+export type ArenaEvent =
+  /** Drop a prop from the drop pool: from a mover (crane) or above a random fighter. */
+  | { kind: 'drop'; start: number; every: [number, number]; fromMover?: string; height: number; warn?: string }
+  /** The ground lurches sideways (vehicle swerve). */
+  | { kind: 'swerve'; start: number; every: [number, number]; accel: number; duration: number; warn?: string }
+  /** Send a sweep mover across the arena (low bridges). */
+  | { kind: 'sweep'; start: number; every: [number, number]; mover: string; warn?: string; warnTime: number }
+  /** Temporary gust of wind across the arena. */
+  | { kind: 'gust'; start: number; every: [number, number]; accel: number; duration: number; warn?: string }
+  /** Breakables start giving way one by one. */
+  | { kind: 'collapse'; start: number; breakables: string[]; interval: number; warn?: string }
+  /** Change a mover's speed. */
+  | { kind: 'speed'; start: number; mover: string; scale: number; warn?: string }
+  /** Make another event fire more often from now on. */
+  | { kind: 'intensify'; start: number; target: number; scale: number; warn?: string };
+
+export type ArenaTheme = 'sunset-rooftop' | 'factory' | 'highway' | 'funfair';
+
 export interface ArenaDef {
   id: string;
   name: string;
-  /** Lighting / sky theme hint for the renderer. */
-  theme: 'sunset-rooftop';
+  /** One-line description for the map picker. */
+  blurb: string;
+  /** Lighting / sky / backdrop theme for the renderer. */
+  theme: ArenaTheme;
   pieces: StaticPiece[];
   props: PropDef[];
+  /** Extra props spawned by 'drop' events (inactive until dropped). */
+  dropPool?: PropDef[];
+  movers?: MoverDef[];
+  breakables?: BreakableDef[];
+  hazards?: HazardDef[];
+  events?: ArenaEvent[];
   spawns: Vec3[];
   /** Rough playable floor bounds (used by bots and the camera). */
   bounds: { minX: number; maxX: number; minZ: number; maxZ: number; floorY: number };
+  /** Falling below this eliminates (default PHYSICS.killY) and how it's described. */
+  killY?: number;
+  killCause?: EliminationCause;
+  /** Good spots for bots to throw people (edges into hazards). */
+  throwTargets?: Vec3[];
+  /** Renderer hint: speed the world appears to scroll past (vehicle maps). */
+  scrollSpeed?: number;
 }
 
-// ---------------------------------------------------------------------------
-// Test arena: "Tar Top" — a small city rooftop with railings that only cover
-// part of the edge, an AC unit to climb, a water tank and loose crates.
-// ---------------------------------------------------------------------------
+export { TAR_TOP as TEST_ARENA } from './arenas/tarTop';
 
-const W = 8; // half width (X)
-const D = 5.5; // half depth (Z)
-
-function railing(x0: number, z0: number, x1: number, z1: number): StaticPiece[] {
-  const out: StaticPiece[] = [];
-  const dx = x1 - x0;
-  const dz = z1 - z0;
-  const length = Math.hypot(dx, dz);
-  const yaw = Math.atan2(dx, dz);
-  const cx = (x0 + x1) / 2;
-  const cz = (z0 + z1) / 2;
-  // Top rail (grabbable) and a lower rail.
-  out.push({ kind: 'box', pos: { x: cx, y: 0.95, z: cz }, half: { x: 0.05, y: 0.05, z: length / 2 }, yaw, style: 'railing' });
-  out.push({ kind: 'box', pos: { x: cx, y: 0.5, z: cz }, half: { x: 0.035, y: 0.035, z: length / 2 }, yaw, style: 'railing' });
-  // Posts every ~1.4m.
-  const posts = Math.max(2, Math.round(length / 1.4) + 1);
-  for (let i = 0; i < posts; i++) {
-    const t = i / (posts - 1);
-    out.push({
-      kind: 'box',
-      pos: { x: x0 + dx * t, y: 0.48, z: z0 + dz * t },
-      half: { x: 0.05, y: 0.48, z: 0.05 },
-      style: 'railing',
-    });
+/** Local rotation of a piece as a quaternion (yaw about Y, then roll about Z; cylinders follow `axis`). */
+export function pieceRotation(p: StaticPiece): { x: number; y: number; z: number; w: number } {
+  if (p.kind === 'cylinder') {
+    const h = Math.SQRT1_2;
+    if (p.axis === 'x') return { x: 0, y: 0, z: h, w: h };
+    if (p.axis === 'z') return { x: h, y: 0, z: 0, w: h };
+    return { x: 0, y: 0, z: 0, w: 1 };
   }
-  return out;
+  const y = (p.yaw ?? 0) / 2;
+  const r = (p.roll ?? 0) / 2;
+  // q = qYaw * qRoll
+  const cy = Math.cos(y);
+  const sy = Math.sin(y);
+  const cr = Math.cos(r);
+  const sr = Math.sin(r);
+  return { x: sy * sr, y: sy * cr, z: cy * sr, w: cy * cr };
 }
-
-const pieces: StaticPiece[] = [
-  // Roof slab.
-  { kind: 'box', pos: { x: 0, y: -0.25, z: 0 }, half: { x: W, y: 0.25, z: D }, style: 'roof', friction: 0.9 },
-  // Building body below (visual only, gives the drop some depth).
-  { kind: 'box', pos: { x: 0, y: -9, z: 0 }, half: { x: W - 0.05, y: 8.5, z: D - 0.05 }, style: 'brick', visualOnly: true },
-  // Low parapet lips along the edges (trip hazard, not a wall).
-  { kind: 'box', pos: { x: 0, y: 0.08, z: -D + 0.12 }, half: { x: W, y: 0.08, z: 0.12 }, style: 'trim' },
-  { kind: 'box', pos: { x: 0, y: 0.08, z: D - 0.12 }, half: { x: W, y: 0.08, z: 0.12 }, style: 'trim' },
-  { kind: 'box', pos: { x: -W + 0.12, y: 0.08, z: 0 }, half: { x: 0.12, y: 0.08, z: D }, style: 'trim' },
-  { kind: 'box', pos: { x: W - 0.12, y: 0.08, z: 0 }, half: { x: 0.12, y: 0.08, z: D }, style: 'trim' },
-  // Partial railings: back edge fully covered on the left, gaps elsewhere.
-  ...railing(-W + 0.15, -D + 0.15, -1.2, -D + 0.15),
-  ...railing(2.2, -D + 0.15, W - 0.15, -D + 0.15),
-  ...railing(-W + 0.15, D - 0.15, -3.5, D - 0.15),
-  ...railing(3.5, D - 0.15, W - 0.15, D - 0.15),
-  ...railing(W - 0.15, -D + 0.15, W - 0.15, -1.5),
-  // AC unit: climbable block with a vent on top.
-  { kind: 'box', pos: { x: -4.2, y: 0.6, z: -2.6 }, half: { x: 1.1, y: 0.6, z: 0.8 }, style: 'metal' },
-  { kind: 'cylinder', pos: { x: -4.2, y: 1.25, z: -2.6 }, radius: 0.55, halfHeight: 0.05, style: 'vent' },
-  // Roof access hut (taller, its roof is a high ground spot).
-  { kind: 'box', pos: { x: 5.2, y: 0.8, z: 2.6 }, half: { x: 1.3, y: 0.8, z: 1.2 }, style: 'concrete' },
-  { kind: 'box', pos: { x: 5.2, y: 1.64, z: 2.6 }, half: { x: 1.4, y: 0.04, z: 1.3 }, style: 'trim' },
-  // Step to get onto the hut.
-  { kind: 'box', pos: { x: 3.55, y: 0.3, z: 2.0 }, half: { x: 0.35, y: 0.3, z: 0.5 }, style: 'wood' },
-  { kind: 'box', pos: { x: 3.55, y: 0.85, z: 3.0 }, half: { x: 0.35, y: 0.25, z: 0.5 }, style: 'wood' },
-  // Water tank on legs at the back (visual landmark + grabbable legs and brace).
-  { kind: 'cylinder', pos: { x: 5.4, y: 3.4, z: -3.6 }, radius: 1.0, halfHeight: 1.0, style: 'wood' },
-  { kind: 'box', pos: { x: 4.75, y: 1.2, z: -4.25 }, half: { x: 0.08, y: 1.2, z: 0.08 }, style: 'pipe' },
-  { kind: 'box', pos: { x: 6.05, y: 1.2, z: -4.25 }, half: { x: 0.08, y: 1.2, z: 0.08 }, style: 'pipe' },
-  { kind: 'box', pos: { x: 4.75, y: 1.2, z: -2.95 }, half: { x: 0.08, y: 1.2, z: 0.08 }, style: 'pipe' },
-  { kind: 'box', pos: { x: 6.05, y: 1.2, z: -2.95 }, half: { x: 0.08, y: 1.2, z: 0.08 }, style: 'pipe' },
-  { kind: 'box', pos: { x: 5.4, y: 1.5, z: -2.95 }, half: { x: 0.7, y: 0.05, z: 0.05 }, style: 'pipe' },
-  // Skylight in the middle (slightly raised glass).
-  { kind: 'box', pos: { x: 0.6, y: 0.12, z: 0.4 }, half: { x: 1.0, y: 0.12, z: 0.7 }, style: 'glass' },
-];
-
-export const TEST_ARENA: ArenaDef = {
-  id: 'tar-top',
-  name: 'Tar Top',
-  theme: 'sunset-rooftop',
-  pieces,
-  props: [
-    { id: 'crate1', shape: 'crate', pos: { x: -1.8, y: 0.35, z: 2.8 }, half: { x: 0.35, y: 0.35, z: 0.35 }, mass: 7, color: 0xc98a4b },
-    { id: 'crate2', shape: 'crate', pos: { x: -1.7, y: 1.05, z: 2.85 }, half: { x: 0.3, y: 0.3, z: 0.3 }, mass: 5, color: 0xd9a066 },
-    { id: 'crate3', shape: 'crate', pos: { x: 2.6, y: 0.35, z: -3.4 }, half: { x: 0.35, y: 0.35, z: 0.35 }, mass: 7, color: 0xc98a4b },
-    { id: 'barrel1', shape: 'barrel', pos: { x: -6.4, y: 0.45, z: 3.6 }, half: { x: 0.3, y: 0.45, z: 0.3 }, mass: 9, color: 0x2f7fd1 },
-    { id: 'ball1', shape: 'ball', pos: { x: 2.6, y: 0.32, z: 2.4 }, half: { x: 0.3, y: 0.3, z: 0.3 }, mass: 1.2, color: 0xff4f6d },
-    { id: 'cone1', shape: 'cone', pos: { x: -0.4, y: 0.3, z: -3.6 }, half: { x: 0.22, y: 0.3, z: 0.22 }, mass: 1.5, color: 0xff6a1a },
-  ],
-  spawns: [
-    { x: -2.8, y: 0, z: 0.6 },
-    { x: 2.8, y: 0, z: 0.6 },
-    { x: -1.2, y: 0, z: -2.0 },
-    { x: 1.4, y: 0, z: 2.6 },
-  ],
-  bounds: { minX: -W, maxX: W, minZ: -D, maxZ: D, floorY: 0 },
-};

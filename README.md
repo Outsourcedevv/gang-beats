@@ -1,8 +1,9 @@
 # Wobble Weights
 
 A wobbly, physics-driven party brawler for the browser. Squishy jelly-bean
-fighters punch, grab, hoist and hurl each other off a city rooftop. Last one
-standing wins the round; first to three rounds wins the match.
+fighters punch, grab, hoist and hurl each other off rooftops, into grinders,
+onto the motorway and into the sea. Last one standing wins the round; first to
+three rounds wins the match.
 
 > The repository is called `gang-beats`; the game itself is **Wobble Weights**,
 > with its own characters and art. The name lives in `GAME_TITLE`
@@ -29,11 +30,24 @@ Then open http://localhost:5173. Other scripts:
 | `npm test` | Run the headless physics/gameplay test suite (Vitest) |
 | `npm run typecheck` | TypeScript only |
 
-## Current status: Stage 2 (complete combat, local play)
+## Current status: Stage 3 (four maps, local play)
 
-Stages 1–2 are **local multiplayer only** (shared keyboard / gamepads / bots on one
+Stages 1–3 are **local multiplayer only** (shared keyboard / gamepads / bots on one
 screen). Online play is Stage 4 and is not implemented yet. See
 [`docs/CHECKLIST.md`](docs/CHECKLIST.md) for what works and what's next.
+
+## Maps
+
+| Map | Setting | Hazards |
+| --- | --- | --- |
+| **Tar Top** | Sunset city rooftop | Gaps in the railings, a skylight that shatters if you land on it, a window-cleaner's cradle riding the front of the building, gusts of wind |
+| **Grinder Works** | Factory over a molten vat | Conveyor into a grinder, hydraulic press, crane that drops crates, collapsing catwalk, breakable barricade, floor panels that fall away late in the round |
+| **Rush Hour** | Back of a speeding truck | Headwind, swerves, low bridges you must dive under, a second truck drifting alongside, the road |
+| **Wobbleland** | Night-time funfair pier | Spinning carousel (goes haywire later), rotten planks, bounce pads, a little wheel over the sea, the sea |
+
+Pick a map on the setup screen, or choose **Rotation** (a new map every round)
+or **Random**. Rounds that drag on get harder as each map escalates, and end
+in a draw at 4 minutes.
 
 ## Controls (defaults, remappable in **Controls**)
 
@@ -77,13 +91,15 @@ src/
                   headbutts, dive tackles, grabbing (physical joints), lifting,
                   throwing, climbing, stamina, daze/KO, struggling, getting up
     game.ts       GameSim: world, props, strike + prop-impact resolution, events, snapshots
-    rules.ts      Last-player-standing rounds, first to 3
+    arena.ts      Arena data types (pieces, movers, breakables, hazards, events)
+    arenas/       The four maps as plain data
+    arenaRuntime.ts  Moving machinery, breakables, hazard zones, timed events
+    rules.ts      Last-player-standing rounds, first to 3, time limit, map rotation
     bot.ts        AI that produces the same inputs a player would
-    arena.ts      Data-only arena description (shared by physics + renderer)
     config.ts     All tuning numbers
   client/   Browser front end
     game.ts       Fixed-timestep loop, interpolation, event → sound/FX
-    render/       three.js scene, arena meshes, character views, camera, FX
+    render/       three.js scene, per-map themes, arena meshes, character views, camera, FX
     input/        Keyboard / mouse / gamepad → PlayerInput, rebinding
     audio/        Procedural Web Audio sound effects
     ui/           Setup screen, controls, pause menu, HUD

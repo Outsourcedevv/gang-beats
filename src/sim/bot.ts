@@ -2,6 +2,7 @@ import type { GameSim } from './game';
 import type { PlayerInput } from './input';
 import { emptyInput } from './input';
 import { makeRng } from './math';
+import { inBox } from './arenaRuntime';
 
 type Mode = 'hunt' | 'carry' | 'retreat';
 
@@ -34,6 +35,51 @@ export class Bot {
   }
 
   think(sim: GameSim, dt: number): PlayerInput {
+    const inp = this.thinkInner(sim, dt);
+    const me = sim.characters[this.index];
+    if (!me || me.state !== 'active' || this.mode === 'carry') return inp;
+    const pos = me.part('pelvis').body.translation();
+    // Low bridge coming: hit the deck.
+    for (const m of sim.runtime.movers) {
+      if (!m.sweeping) continue;
+      const dx = pos.x - m.pos.x;
+      if (Math.abs(dx) < 5 && dx * m.vel.x > 0 && me.grounded) inp.dive = true;
+    }
+    // Get off conveyor belts.
+    for (const h of sim.arena.hazards ?? []) {
+      if (h.kind !== 'belt' || !inBox(pos, h.box, 0.3)) continue;
+      const cz = (sim.arena.bounds.minZ + sim.arena.bounds.maxZ) / 2;
+      inp.moveX = -Math.sign(h.velocity.x) * 0.3;
+      inp.moveZ = Math.sign(cz - pos.z) || 1;
+    }
+    // Don't walk into kill zones, under presses, or off edges and into holes.
+    const ml = Math.hypot(inp.moveX, inp.moveZ);
+    if (ml > 0.1 && me.grounded) {
+      const bad = (dx: number, dz: number) => {
+        const p = { x: pos.x + dx * 0.9, y: pos.y, z: pos.z + dz * 0.9 };
+        return sim.runtime.isDeadly(p, 0.4) || !sim.runtime.hasFloor(p, 1.6, me.groups);
+      };
+      let dx = inp.moveX / ml;
+      let dz = inp.moveZ / ml;
+      if (bad(dx, dz)) {
+        // Try veering left, right, then backing off.
+        const options = [
+          [-dz, dx],
+          [dz, -dx],
+          [-dx, -dz],
+        ];
+        const ok = options.find(([x, z]) => !bad(x, z)) ?? [-dx, -dz];
+        dx = ok[0];
+        dz = ok[1];
+        inp.moveX = dx;
+        inp.moveZ = dz;
+        inp.sprint = false;
+      }
+    }
+    return inp;
+  }
+
+  private thinkInner(sim: GameSim, dt: number): PlayerInput {
     const inp = this.input;
     const me = sim.characters[this.index];
     inp.jump = false;
@@ -62,6 +108,8 @@ export class Bot {
     const pos = me.part('pelvis').body.translation();
     const b = sim.arena.bounds;
     const edgeDist = Math.min(pos.x - b.minX, b.maxX - pos.x, pos.z - b.minZ, b.maxZ - pos.z);
+    // Narrow arenas (truck decks) need a smaller comfort zone.
+    const margin = Math.min(1.0, 0.3 * Math.min((b.maxX - b.minX) / 2, (b.maxZ - b.minZ) / 2));
     this.punchCd -= dt;
     this.retarget -= dt;
     this.wobble += dt * (0.7 + this.rng() * 0.6);
@@ -121,10 +169,10 @@ export class Bot {
         inp.grab = true;
         inp.lift = true;
         // Walk toward the nearest edge, then throw.
-        const out = this.nearestEdgeDir(sim, pos.x, pos.z);
-        inp.moveX = out.x;
-        inp.moveZ = out.z;
-        if ((edgeDist < 1.6 && me.liftAmount > 0.8) || this.carryTimer > 4) {
+        const goal = this.throwGoal(sim, pos.x, pos.z);
+        inp.moveX = goal.x;
+        inp.moveZ = goal.z;
+        if ((goal.dist < 1.6 && me.liftAmount > 0.8) || this.carryTimer > 5) {
           inp.grab = false; // release while lifting = throw
           this.mode = 'retreat';
           this.retreatTimer = 0.9;
@@ -133,7 +181,7 @@ export class Bot {
       }
     }
 
-    if (this.mode === 'retreat' || (edgeDist < 1.0 && this.mode === 'hunt')) {
+    if (this.mode === 'retreat' || (edgeDist < margin && this.mode === 'hunt')) {
       if (this.mode !== 'retreat') {
         this.mode = 'retreat';
         this.retreatTimer = 0.6 + this.rng() * 0.4;
@@ -233,6 +281,28 @@ export class Bot {
       }
     }
     this.target = best;
+  }
+
+  /** Where to carry a victim: the arena's throw targets (hazards) or the nearest edge. */
+  private throwGoal(sim: GameSim, x: number, z: number): { x: number; z: number; dist: number } {
+    const targets = sim.arena.throwTargets;
+    if (targets?.length) {
+      let best = targets[0];
+      let bd = Infinity;
+      for (const t of targets) {
+        const d = Math.hypot(t.x - x, t.z - z);
+        if (d < bd) {
+          bd = d;
+          best = t;
+        }
+      }
+      const l = bd || 1;
+      return { x: (best.x - x) / l, z: (best.z - z) / l, dist: bd };
+    }
+    const b = sim.arena.bounds;
+    const e = this.nearestEdgeDir(sim, x, z);
+    const dist = Math.min(x - b.minX, b.maxX - x, z - b.minZ, b.maxZ - z);
+    return { ...e, dist };
   }
 
   private nearestEdgeDir(sim: GameSim, x: number, z: number): { x: number; z: number } {

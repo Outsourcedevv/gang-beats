@@ -6,6 +6,9 @@ export interface SceneBundle {
   scene: THREE.Scene;
   camera: THREE.PerspectiveCamera;
   sun: THREE.DirectionalLight;
+  hemi: THREE.HemisphereLight;
+  rim: THREE.DirectionalLight;
+  sky: THREE.Mesh<THREE.SphereGeometry, THREE.ShaderMaterial>;
   resize(): void;
 }
 
@@ -85,8 +88,6 @@ export function createScene(container: HTMLElement): SceneBundle {
   rim.position.set(8, 6, -10);
   scene.add(rim);
 
-  buildCity(scene);
-
   const resize = () => {
     const w = container.clientWidth || window.innerWidth;
     const h = container.clientHeight || window.innerHeight;
@@ -96,11 +97,11 @@ export function createScene(container: HTMLElement): SceneBundle {
   };
   resize();
   window.addEventListener('resize', resize);
-  return { renderer, scene, camera, sun, resize };
+  return { renderer, scene, camera, sun, hemi, rim, sky, resize };
 }
 
 /** A ring of instanced buildings below and around the rooftop. */
-function buildCity(scene: THREE.Scene): void {
+export function buildCity(scene: THREE.Object3D): void {
   let s = 4242;
   const r = () => ((s = (s * 16807) % 2147483647) / 2147483647);
   const geo = new THREE.BoxGeometry(1, 1, 1);

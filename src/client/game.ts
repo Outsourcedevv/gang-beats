@@ -1,13 +1,15 @@
 import * as THREE from 'three';
 import { GameSim } from '../sim/game';
-import { TEST_ARENA } from '../sim/arena';
 import type { ArenaDef } from '../sim/arena';
+import { ARENAS, arenaById } from '../sim/arenas';
 import { Bot } from '../sim/bot';
 import type { SimEvent } from '../sim/events';
 import type { PlayerInput } from '../sim/input';
 import { createScene } from './render/scene';
 import type { SceneBundle } from './render/scene';
-import { buildArena } from './render/arenaView';
+import { ArenaView } from './render/arenaView';
+import { applyTheme } from './render/themes';
+import type { ThemeView } from './render/themes';
 import { CharacterView } from './render/characterView';
 import { CameraRig } from './render/cameraRig';
 import { Effects } from './render/fx';
@@ -21,6 +23,9 @@ export interface Fighter {
   look: FighterLook;
 }
 
+/** Which map(s) a match uses: a specific arena id, 'random' (one random map) or 'rotate' (new map every round). */
+export type MapChoice = string;
+
 export interface GameListener {
   onEvent(ev: SimEvent, game: Game): void;
 }
@@ -31,12 +36,15 @@ export interface GameListener {
  */
 export class Game {
   readonly gfx: SceneBundle;
-  readonly arena: ArenaDef = TEST_ARENA;
+  arena: ArenaDef = ARENAS[0];
   sim: GameSim | null = null;
+  private arenaView: ArenaView;
+  private theme: ThemeView;
+  private mapChoice: MapChoice = ARENAS[0].id;
+  private rotation: ArenaDef[] = [];
   fighters: Fighter[] = [];
   views: CharacterView[] = [];
   private bots: (Bot | null)[] = [];
-  private propMeshes: THREE.Object3D[];
   private rig: CameraRig;
   private fx: Effects;
   private acc = 0;
@@ -54,7 +62,8 @@ export class Game {
     private readonly sfx: Sfx,
   ) {
     this.gfx = createScene(container);
-    this.propMeshes = buildArena(this.gfx.scene, this.arena);
+    this.theme = applyTheme(this.gfx, this.arena);
+    this.arenaView = new ArenaView(this.gfx.scene, this.arena);
     this.rig = new CameraRig(this.gfx.camera);
     this.fx = new Effects(this.gfx.scene);
     this.rig.snap([new THREE.Vector3(0, 1, 0)]);
@@ -69,12 +78,52 @@ export class Game {
     return this.sim !== null;
   }
 
-  start(fighters: Fighter[]): void {
+  /** Swap the visible arena (scenery, theme, lighting). */
+  private showArena(arena: ArenaDef): void {
+    if (arena === this.arenaView.arena) return;
+    this.arenaView.dispose(this.gfx.scene);
+    this.theme.dispose();
+    this.arena = arena;
+    this.theme = applyTheme(this.gfx, arena);
+    this.arenaView = new ArenaView(this.gfx.scene, arena);
+    this.sfx.setAmbience(arena.theme);
+  }
+
+  /** Preview a map behind the menus. */
+  preview(choice: MapChoice): void {
+    const a = arenaById(choice);
+    if (a && !this.sim) this.showArena(a);
+  }
+
+  private firstArena(choice: MapChoice): ArenaDef {
+    if (choice === 'random' || choice === 'rotate') {
+      this.rotation = [...ARENAS].sort(() => Math.random() - 0.5);
+      return this.rotation[0];
+    }
+    return arenaById(choice) ?? ARENAS[0];
+  }
+
+  private makeSim(arena: ArenaDef, resume?: { round: number; scores: number[] }): GameSim {
+    const sandbox = this.fighters.length < 2;
+    const sim = new GameSim({
+      arena,
+      players: this.fighters.length,
+      sandbox,
+      seed: (Math.random() * 1e9) | 0,
+      resume,
+      nextArena: this.mapChoice === 'rotate' ? (round) => this.rotation[(round - 1) % this.rotation.length] : undefined,
+    });
+    for (const c of sim.characters) c.holdToPunch = this.holdToPunch;
+    return sim;
+  }
+
+  start(fighters: Fighter[], map: MapChoice = this.mapChoice): void {
     this.stop();
     this.fighters = fighters;
-    const sandbox = fighters.length < 2;
-    this.sim = new GameSim({ arena: this.arena, players: fighters.length, sandbox, seed: (Math.random() * 1e9) | 0 });
-    for (const c of this.sim.characters) c.holdToPunch = this.holdToPunch;
+    this.mapChoice = map;
+    const arena = this.firstArena(map);
+    this.showArena(arena);
+    this.sim = this.makeSim(arena);
     this.views = fighters.map((f, i) => {
       const v = new CharacterView(f.look, i);
       this.gfx.scene.add(v.root);
@@ -130,22 +179,18 @@ export class Game {
         for (const ev of sim.drainEvents()) this.handleEvent(ev);
         this.acc -= sim.dt;
         steps++;
+        if (sim.pendingArena) break;
       }
       if (steps === 5) this.acc = 0; // fell behind; drop time rather than spiral
+      if (sim.pendingArena) this.switchArena(sim.pendingArena.arena, sim.pendingArena.resume);
     }
-    const alpha = sim ? Math.min(1, this.acc / sim.dt) : 0;
-    if (sim) {
-      sim.characters.forEach((c, i) => this.views[i].update(c, sim.prevSnap, sim.currSnap, sim.partOffset(i, 0), alpha, dt));
-      const q = new THREE.Quaternion();
-      sim.props.forEach((_p, i) => {
-        const o = sim.propOffset(i);
-        const a = sim.prevSnap;
-        const b = sim.currSnap;
-        const m = this.propMeshes[i];
-        m.position.set(a[o] + (b[o] - a[o]) * alpha, a[o + 1] + (b[o + 1] - a[o + 1]) * alpha, a[o + 2] + (b[o + 2] - a[o + 2]) * alpha);
-        THREE.Quaternion.slerpFlat(q as unknown as number[], 0, a as unknown as number[], o + 3, b as unknown as number[], o + 3, alpha);
-        m.quaternion.copy(q);
-      });
+    const live = this.sim;
+    const alpha = live ? Math.min(1, this.acc / live.dt) : 0;
+    const vdt = this.paused ? 0 : dt;
+    this.arenaView.update(live, alpha, vdt);
+    this.theme.update(vdt, t);
+    if (live) {
+      live.characters.forEach((c, i) => this.views[i].update(c, live.prevSnap, live.currSnap, live.partOffset(i, 0), alpha, dt));
       if (!this.paused) this.rig.update(this.focusPoints(), dt);
     } else {
       // Idle attract camera: slow orbit over the empty arena.
@@ -164,10 +209,21 @@ export class Game {
     for (const c of sim.characters) {
       if (!c.alive) continue;
       const p = c.torsoPos;
-      if (p.y < -2.5) continue;
+      if (p.y < Math.max(-2.5, sim.killY + 0.2)) continue;
       pts.push(new THREE.Vector3(p.x, p.y, p.z));
     }
     return pts;
+  }
+
+  /** The rules moved the match to another arena: rebuild the simulation there, keeping scores. */
+  private switchArena(arena: ArenaDef, resume: { round: number; scores: number[] }): void {
+    this.sim?.dispose();
+    this.showArena(arena);
+    this.sim = this.makeSim(arena, resume);
+    this.bots = this.fighters.map((f, i) => (f.device === 'bot' ? new Bot(i, (Math.random() * 1e9) | 0, 0.45 + Math.random() * 0.35) : null));
+    this.acc = 0;
+    this.rig.snap(this.focusPoints());
+    for (const ev of this.sim.drainEvents()) this.handleEvent(ev);
   }
 
   private handleEvent(ev: SimEvent): void {
@@ -246,8 +302,62 @@ export class Game {
       case 'topple':
         sfx.grunt(look(ev.char).voice, 0.7);
         break;
-      case 'eliminated':
-        sfx.fall();
+      case 'eliminated': {
+        const p = new THREE.Vector3(ev.pos.x, Math.max(ev.pos.y, this.sim ? this.sim.killY : -9), ev.pos.z);
+        if (ev.cause === 'water') {
+          this.fx.splash(new THREE.Vector3(ev.pos.x, -0.8, ev.pos.z));
+          sfx.splash();
+        } else if (ev.cause === 'molten') {
+          this.fx.sparks(new THREE.Vector3(ev.pos.x, -1.9, ev.pos.z));
+          sfx.sizzle();
+        } else if (ev.cause === 'grinder') {
+          this.fx.sparks(p);
+          this.fx.splinters(p);
+          sfx.grind();
+          this.rig.addShake(0.08);
+        } else if (ev.cause === 'road') {
+          this.fx.dust(p, 8);
+          sfx.thud(10);
+          sfx.fall();
+        } else sfx.fall();
+        break;
+      }
+      case 'shatter':
+        this.fx.shards(new THREE.Vector3(ev.pos.x, ev.pos.y, ev.pos.z), ev.half);
+        sfx.shatter();
+        break;
+      case 'break':
+        this.fx.splinters(new THREE.Vector3(ev.pos.x, ev.pos.y, ev.pos.z));
+        sfx.crack();
+        break;
+      case 'creak':
+        sfx.creak();
+        break;
+      case 'drop':
+        this.fx.ring(new THREE.Vector3(ev.pos.x, ev.pos.y, ev.pos.z), this.gfx.scene);
+        sfx.whistle();
+        break;
+      case 'bounce':
+        sfx.boing();
+        break;
+      case 'crush':
+        this.fx.dust(new THREE.Vector3(ev.pos.x, ev.pos.y, ev.pos.z), 10);
+        sfx.crush();
+        this.rig.addShake(0.1);
+        break;
+      case 'swerve':
+        sfx.truckHorn();
+        this.rig.addShake(0.08);
+        break;
+      case 'gust':
+        sfx.gust();
+        break;
+      case 'sweepWarning':
+        sfx.truckHorn();
+        break;
+      case 'warning':
+      case 'timeUp':
+      case 'arenaChange':
         break;
       case 'roundStart':
         sfx.bell();

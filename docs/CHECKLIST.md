@@ -3,7 +3,7 @@
 Status key: ✅ done and tested · 🟡 partial / basic version · ⬜ not started
 
 How things were verified: `npm test` runs the real simulation headlessly
-(20 tests); the browser build was driven with headless Chromium via Playwright
+(42 tests); the browser build was driven with headless Chromium via Playwright
 (setup → match → punching, grabbing, lifting, throwing, pause, rebinding,
 settings persistence) with no console errors. Feel/tuning still needs
 hands-on playtesting on real hardware — the container only has a software
@@ -34,7 +34,7 @@ Tuning notes from automated bot-vs-bot runs: rounds last ~12–105 s (1v1) and
 ~20–90 s (4 players) with very aggressive bots; human rounds should be longer.
 Physics costs ~0.8 ms per step for 8 fighters.
 
-## Stage 2 — Complete combat ✅ (current)
+## Stage 2 — Complete combat ✅
 
 | Feature | Status | Notes |
 | --- | --- | --- |
@@ -54,8 +54,26 @@ Physics costs ~0.8 ms per step for 8 fighters.
 Bot-vs-bot tuning runs after Stage 2: rounds ~16–118 s (1v1) and ~17–110 s
 (4 players); bots climbed back from the edge several times per run.
 
-## Stage 3 — Maps (3–5)
-⬜ Factory, moving truck, amusement park, one more original hazard map. Moving platforms, collapsing floors, falling objects, machinery.
+## Stage 3 — Maps ✅ (current)
+
+| Feature | Status | Notes |
+| --- | --- | --- |
+| 4 maps with distinct identities | ✅ | Tar Top (sunset rooftop), Grinder Works (factory), Rush Hour (truck on a motorway), Wobbleland (night funfair pier); each has its own sky, fog, lights, backdrop and ambient sound |
+| Moving platforms | ✅ | Window-cleaner cradle, crane grab bar, neighbouring truck, carousel, wheel gondolas. Fighters ride them (movement is relative to the surface) |
+| Moving machinery | ✅ | Hydraulic press (knocks out anyone under it), grinder rollers, conveyor belt |
+| Falling objects | ✅ | Crane drops crates (target ring on the floor); thrown/dropped props hurt |
+| Destructible structures | ✅ | Shattering skylight, breakable plank barricade |
+| Collapsing floors | ✅ | Catwalk tiles and rotten pier planks give way when stood on; factory floor panels and the remaining planks collapse late in the round |
+| Environmental hazards | ✅ | Kill zones (grinder, molten vat, road, sea, building interior), headwind, swerves, gusts, low bridges, bounce pads |
+| Pick-up objects | ✅ | Crates, barrels, cones, balls on every map |
+| Different destruction levels | ✅ | Low (Tar Top) → medium (Rush Hour, Wobbleland) → high (Grinder Works) |
+| Escalation & time limit | ✅ | Each map intensifies after ~90–150 s; rounds end in a draw at 240 s |
+| Map choice | ✅ | Setup screen: any map, Random, or Rotation (new map every round, score carried over) |
+| Bots on every map | ✅ | Avoid kill zones, presses, belts and edges/holes (floor raycast), carry victims to hazards, dive under low bridges |
+
+Bot-vs-bot runs (4 bots, aggressive): Tar Top rounds ~25–110 s, Grinder Works
+~20–200 s, Rush Hour ~15–30 s (narrow deck, very chaotic), Wobbleland ~13–90 s.
+Physics ≈ 0.7–1.2 ms per step with 8 fighters.
 
 ## Stage 4 — Online multiplayer
 ⬜ Node + WebSocket authoritative server running `src/sim`, interpolation/prediction, public matchmaking, private rooms + codes, friend invites, host controls, bots filling slots, per-player grey spectator screen.
@@ -71,7 +89,6 @@ Bot-vs-bot tuning runs after Stage 2: rounds ~16–118 s (1v1) and ~17–110 s
 
 ## Known issues / limitations
 - Online multiplayer is not implemented yet (Stage 4). Everything is local, on one screen.
-- Only one map.
 - Keyboard scheme B shares the keyboard with scheme A; for two players a gamepad is more comfortable.
 - Fighters hanging off the far (back) edge can be partly hidden behind the roof from the shared camera; their name tag and card still show them.
 - Physics feel has been tuned with automated tests and screenshots only; real playtesting will need follow-up tuning (see `src/sim/config.ts`).

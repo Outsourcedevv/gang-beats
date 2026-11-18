@@ -1,12 +1,20 @@
 import type { GameSim } from './game';
 
-export type RoundPhase = 'countdown' | 'fight' | 'roundOver' | 'matchOver' | 'sandbox';
+export type RoundPhase = 'countdown' | 'fight' | 'roundOver' | 'matchOver' | 'sandbox' | 'switching';
+
+/** Carried over when the match moves to a new arena between rounds. */
+export interface RulesResume {
+  round: number;
+  scores: number[];
+}
 
 export const WINS_TO_WIN_MATCH = 3;
 const COUNTDOWN = 2.2;
 const LAST_STANDING_GRACE = 1.2; // simultaneous falls count as a draw
 const ROUND_OVER_TIME = 3.6;
 const MATCH_OVER_TIME = 6.5;
+/** Rounds that drag on past this end in a draw (arenas also escalate well before). */
+export const ROUND_TIME_LIMIT = 240;
 
 /**
  * Last-player-standing rounds, first to three round wins.
@@ -26,15 +34,17 @@ export class RoundRules {
   constructor(
     private readonly sim: GameSim,
     sandbox: boolean,
+    resume?: RulesResume,
   ) {
-    this.scores = sim.characters.map(() => 0);
+    this.scores = sim.characters.map((_, i) => resume?.scores[i] ?? 0);
+    if (resume) this.round = resume.round;
     this.phase = sandbox ? 'sandbox' : 'countdown';
     this.timer = COUNTDOWN;
     if (!sandbox) sim.emit({ type: 'roundStart', round: this.round });
   }
 
   inputsEnabled(): boolean {
-    return this.phase !== 'countdown';
+    return this.phase !== 'countdown' && this.phase !== 'switching';
   }
 
   aliveCount(): number {
@@ -45,6 +55,7 @@ export class RoundRules {
     const sim = this.sim;
     switch (this.phase) {
       case 'sandbox':
+      case 'switching':
         return;
       case 'countdown':
         this.timer -= dt;
@@ -58,6 +69,14 @@ export class RoundRules {
       case 'fight': {
         this.roundTime += dt;
         if (sim.characters.length < 2) return;
+        if (this.roundTime >= ROUND_TIME_LIMIT) {
+          sim.emit({ type: 'timeUp' });
+          this.roundWinner = -1;
+          sim.emit({ type: 'roundEnd', winner: -1 });
+          this.phase = 'roundOver';
+          this.timer = ROUND_OVER_TIME;
+          return;
+        }
         const alive = sim.characters.filter((c) => c.alive);
         if (alive.length <= 1) {
           this.graceTimer += dt;
@@ -101,6 +120,14 @@ export class RoundRules {
 
   startRound(n: number): void {
     this.round = n;
+    const next = this.sim.nextArena?.(n);
+    if (next && next.id !== this.sim.arena.id) {
+      // The host builds a fresh simulation on the new arena and resumes from here.
+      this.phase = 'switching';
+      this.sim.pendingArena = { arena: next, resume: { round: n, scores: [...this.scores] } };
+      this.sim.emit({ type: 'arenaChange', arena: next.id });
+      return;
+    }
     this.sim.resetRound();
     this.phase = 'countdown';
     this.timer = COUNTDOWN;

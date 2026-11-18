@@ -16,6 +16,8 @@ export interface Settings {
   mouseControls: boolean;
   bindings: Record<'kbA' | 'kbB', KeyBindings> | null;
   slots: SlotSetup[];
+  /** Arena id, 'random', or 'rotate' (new map every round). */
+  map?: string;
 }
 
 const KEY = 'wobbleweights.settings.v1';
@@ -26,6 +28,7 @@ export const DEFAULT_SETTINGS: Settings = {
   holdToPunch: false,
   mouseControls: true,
   bindings: null,
+  map: 'rotate',
   slots: [
     { device: 'kbA', fighter: 0 },
     { device: 'bot', fighter: 1 },

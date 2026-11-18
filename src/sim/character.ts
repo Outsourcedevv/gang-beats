@@ -34,6 +34,7 @@ import {
   resetRagdoll,
 } from './ragdoll';
 import type { AttackKind, SimEvent } from './events';
+import type { EliminationCause } from './arena';
 
 type World = RAPIER_NS.World;
 type RigidBody = RAPIER_NS.RigidBody;
@@ -59,6 +60,11 @@ export interface SimContext {
   propBodies: RigidBody[];
   ownerOfBody(body: RigidBody): Owner | null;
   emit(ev: SimEvent): void;
+  /** Falling below this eliminates, described as `killCause`. */
+  killY: number;
+  killCause: EliminationCause;
+  /** Conveyor-style moving surfaces. */
+  surfaceVelocity(collider: RAPIER_NS.Collider): Vec3 | null;
 }
 
 type PunchPhase = 'idle' | 'windup' | 'strike' | 'recover';
@@ -176,6 +182,7 @@ export class Character {
   private prevHeadVel: Vec3 = { x: 0, y: 0, z: 0 };
   private prevTorsoVel: Vec3 = { x: 0, y: 0, z: 0 };
   private wasGrounded = true;
+  private fallSpeed = 0;
   private hitThisStep = false;
   /** Pre-step hand velocities, used to measure punch strength. */
   readonly handVelPre: [Vec3, Vec3] = [
@@ -409,10 +416,14 @@ export class Character {
       ctx.emit({ type: 'impact', char: this.index, pos: head.translation(), strength: Math.max(dv, dvt) });
     }
 
-    // Landing.
-    if (this.grounded && !this.wasGrounded && this.prevTorsoVel.y < -4) {
-      ctx.emit({ type: 'land', char: this.index, pos: this.part('pelvis').body.translation(), strength: -this.prevTorsoVel.y });
+    // Landing: strength is the fastest fall speed of this airtime (the balance
+    // spring cushions the final approach).
+    if (!this.grounded) this.fallSpeed = Math.max(this.fallSpeed, -tv.y);
+    if (this.grounded && !this.wasGrounded) {
+      const strength = Math.max(this.fallSpeed, -this.prevTorsoVel.y);
+      if (strength > 4) ctx.emit({ type: 'land', char: this.index, pos: this.part('pelvis').body.translation(), strength });
     }
+    if (this.grounded) this.fallSpeed = 0;
     this.wasGrounded = this.grounded;
 
     // Toppling: lost balance without being knocked out.
@@ -426,7 +437,7 @@ export class Character {
     }
 
     // Out of the arena.
-    if (this.part('pelvis').body.translation().y < PHYSICS.killY) this.eliminate(ctx);
+    if (this.part('pelvis').body.translation().y < ctx.killY) this.eliminate(ctx);
   }
 
   // ------------------------------------------------------------------------
@@ -493,8 +504,27 @@ export class Character {
     this.balance = Math.min(this.balance, 0.1);
   }
 
-  eliminate(ctx: SimContext): void {
+  /** Squashed by a press: instant knockout. */
+  crush(ctx: SimContext): void {
+    this.hitThisStep = true;
+    this.hurtTimer = 0.6;
+    if (this.state === 'active') this.knockOut(ctx);
+    else if (this.state === 'ko') this.koTimer = Math.max(this.koTimer, COMBAT.koDuration);
+  }
+
+  /** Suppress the balance spring for a moment (launch pads, explosions). */
+  hoverBreak(seconds: number): void {
+    this.hoverOff = Math.max(this.hoverOff, seconds);
+  }
+
+  /** The body we're standing on (if any). */
+  standingOn(): RigidBody | null {
+    return this.groundHit ? this.groundBody : null;
+  }
+
+  eliminate(ctx: SimContext, cause: EliminationCause = ctx.killCause): void {
     if (this.state === 'eliminated') return;
+    const pos = this.part('pelvis').body.translation();
     this.releaseAll(ctx);
     // Anyone holding us lets go.
     for (const c of ctx.characters) {
@@ -502,7 +532,7 @@ export class Character {
     }
     this.state = 'eliminated';
     for (const p of this.rag.parts) p.body.setEnabled(false);
-    ctx.emit({ type: 'eliminated', char: this.index });
+    ctx.emit({ type: 'eliminated', char: this.index, cause, pos: { x: pos.x, y: pos.y, z: pos.z } });
   }
 
   reset(world: World, spawn: Vec3, yaw: number): void {
@@ -558,7 +588,9 @@ export class Character {
       if (owner?.kind === 'char' && owner.index === this.liftedBy) this.groundHit = false;
       if (this.groundBody && this.arms.some((a) => a.grabBody === this.groundBody)) this.groundHit = false;
       const gb = this.groundBody;
-      if (this.groundHit && gb && !gb.isFixed()) {
+      const sv = this.groundHit ? ctx.surfaceVelocity(hit.collider) : null;
+      if (sv) this.groundVel = { x: sv.x, y: sv.y, z: sv.z };
+      else if (this.groundHit && gb && !gb.isFixed()) {
         const v = gb.velocityAtPoint({ x: p.x, y: p.y - hit.timeOfImpact, z: p.z });
         this.groundVel = { x: v.x, y: v.y, z: v.z };
       } else this.groundVel = { x: 0, y: 0, z: 0 };

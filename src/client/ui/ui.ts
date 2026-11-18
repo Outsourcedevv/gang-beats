@@ -1,6 +1,8 @@
 import type { Game } from '../game';
 import type { SimEvent } from '../../sim/events';
-import { WINS_TO_WIN_MATCH } from '../../sim/rules';
+import { ROUND_TIME_LIMIT, WINS_TO_WIN_MATCH } from '../../sim/rules';
+import { ARENAS } from '../../sim/arenas';
+import type { EliminationCause } from '../../sim/arena';
 import { COMBAT, STAMINA } from '../../sim/config';
 import { FIGHTERS } from '../render/fighters';
 import type { InputManager, DeviceId, Action } from '../input/devices';
@@ -25,6 +27,15 @@ function h<K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Attrs = {}, ...
 }
 
 const hex = (n: number) => '#' + n.toString(16).padStart(6, '0');
+
+const OUT_LINES: Record<EliminationCause, string> = {
+  fall: 'took the long way down!',
+  water: 'is sleeping with the fishes!',
+  road: 'hit the road!',
+  grinder: 'went through the grinder!',
+  molten: 'took a lava bath!',
+  building: 'fell through the skylight!',
+};
 
 const DEVICE_ORDER: DeviceId[] = ['kbA', 'kbB', 'pad0', 'pad1', 'pad2', 'pad3', 'bot', 'off'];
 
@@ -73,6 +84,7 @@ export class UI {
         this.statsEl.classList.toggle('hidden', !this.showStats);
       }
     });
+    this.game.preview(settings.map ?? 'rotate');
     this.show('setup');
     requestAnimationFrame(this.tick);
     window.addEventListener('gamepadconnected', () => this.renderSetup());
@@ -168,6 +180,7 @@ export class UI {
         h('h1', { class: 'title' }, GAME_TITLE),
         h('p', { class: 'subtitle' }, 'Wobbly physics brawling on the rooftops. Last one standing wins the round — first to three rounds takes the match.'),
         h('div', { class: 'slots' }, ...slots),
+        this.mapPicker(),
         h(
           'div',
           { class: 'options' },
@@ -238,6 +251,51 @@ export class UI {
     );
   }
 
+  private mapPicker(): HTMLElement {
+    const s = this.settings;
+    const current = s.map ?? 'rotate';
+    const themeColors: Record<string, string> = {
+      'sunset-rooftop': 'linear-gradient(135deg,#3a4a9a,#f59a8a,#ffc47e)',
+      factory: 'linear-gradient(135deg,#2a1d18,#ff5a00)',
+      highway: 'linear-gradient(135deg,#2f6fd0,#f3e3c0)',
+      funfair: 'linear-gradient(135deg,#070a24,#ff4fa3)',
+    };
+    const card = (id: string, name: string, blurb: string, bg: string) =>
+      h(
+        'button',
+        {
+          class: `map ${current === id ? 'picked' : ''}`,
+          style: `--bg:${bg}`,
+          'aria-pressed': current === id ? 'true' : 'false',
+          title: blurb,
+          onclick: () => {
+            s.map = id;
+            this.persist();
+            this.sfx.click();
+            this.game.preview(id);
+            this.renderSetup();
+          },
+        },
+        h('span', { class: 'map-swatch' }),
+        h('span', { class: 'map-name' }, name),
+        h('span', { class: 'map-blurb' }, blurb),
+      );
+    const picked = ARENAS.find((a) => a.id === current);
+    return h(
+      'div',
+      { class: 'maps' },
+      h('div', { class: 'maps-title' }, 'Map'),
+      h(
+        'div',
+        { class: 'map-row' },
+        card('rotate', 'Rotation', 'A different map every round.', 'repeating-linear-gradient(90deg,#3a4a9a 0 25%,#ff5a00 25% 50%,#2f6fd0 50% 75%,#ff4fa3 75%)'),
+        card('random', 'Random', 'One random map for the whole match.', 'repeating-linear-gradient(45deg,#ddd 0 8px,#bbb 8px 16px)'),
+        ...ARENAS.map((a) => card(a.id, a.name, a.blurb, themeColors[a.theme])),
+      ),
+      picked ? h('div', { class: 'map-desc' }, picked.blurb) : null,
+    );
+  }
+
   private persist(): void {
     saveSettings(this.settings);
   }
@@ -250,7 +308,7 @@ export class UI {
       .map((s) => ({ device: s.device, look: FIGHTERS[s.fighter] }));
     if (!fighters.length) return;
     this.game.setHoldToPunch(this.settings.holdToPunch);
-    this.game.start(fighters);
+    this.game.start(fighters, this.settings.map ?? 'rotate');
     this.buildCards();
     this.scoreKey = '';
     this.helpEl.classList.toggle('hidden', false);
@@ -441,7 +499,8 @@ export class UI {
     this.cardsEl = h('div', { class: 'cards' });
     this.tagsEl = h('div', { class: 'tags' });
     this.statsEl = h('div', { class: 'stats hidden' });
-    this.hudEl = h('div', { class: 'hud hidden' }, this.tagsEl, this.scoreEl, this.bannerEl, this.cardsEl, this.statsEl);
+    this.warnEl = h('div', { class: 'warning hidden' });
+    this.hudEl = h('div', { class: 'hud hidden' }, this.tagsEl, this.scoreEl, this.warnEl, this.bannerEl, this.cardsEl, this.statsEl);
     this.root.append(this.hudEl);
   }
 
@@ -464,6 +523,18 @@ export class UI {
     this.tagsEl.replaceChildren(
       ...this.game.fighters.map((f, i) => h('div', { class: 'tag', style: `--c:${hex(f.look.body)}` }, `P${i + 1}`, h('div', { class: 'tag-stam' }, h('i')))),
     );
+  }
+
+  private warnEl!: HTMLElement;
+  private warnTimer = 0;
+
+  /** Hazard warning strip under the scoreboard. */
+  private warn(text: string): void {
+    this.warnEl.textContent = '⚠ ' + text;
+    this.warnEl.classList.remove('hidden', 'flash');
+    void this.warnEl.offsetWidth;
+    this.warnEl.classList.add('flash');
+    this.warnTimer = 2.6;
   }
 
   private banner(text: string, sub = '', seconds = 2): void {
@@ -489,12 +560,23 @@ export class UI {
         this.banner('BRAWL!', '', 1);
         break;
       case 'eliminated':
-        if (this.game.sim?.rules.phase === 'fight' || this.game.sim?.rules.phase === 'sandbox') this.banner(`${this.name(ev.char)} is out!`, '', 1.2);
+        if (this.game.sim?.rules.phase === 'fight' || this.game.sim?.rules.phase === 'sandbox') this.banner(`${this.name(ev.char)} ${OUT_LINES[ev.cause]}`, '', 1.4);
         if (this.game.sim?.rules.phase === 'sandbox') {
           // Practice mode: respawn after a moment.
           setTimeout(() => this.game.sim?.resetRound(), 1500);
         }
         break;
+      case 'warning':
+        this.warn(ev.text);
+        break;
+      case 'timeUp':
+        this.warn("Time's up!");
+        break;
+      case 'arenaChange': {
+        const a = ARENAS.find((x) => x.id === ev.arena);
+        if (a) this.banner(a.name, a.blurb, 2.4);
+        break;
+      }
       case 'roundEnd':
         if (ev.winner >= 0) this.banner(`${this.name(ev.winner)} wins the round!`, this.scoreLine(), 3.4);
         else this.banner('Draw!', 'Nobody survived that one.', 3.4);
@@ -527,15 +609,22 @@ export class UI {
       this.bannerTimer -= dt;
       if (this.bannerTimer <= 0) this.bannerEl.classList.add('hidden');
     }
+    if (this.warnTimer > 0 && !this.game.paused) {
+      this.warnTimer -= dt;
+      if (this.warnTimer <= 0) this.warnEl.classList.add('hidden');
+    }
     // Scoreboard.
     const rules = sim.rules;
-    const key = `${rules.phase}|${rules.round}|${rules.scores.join(',')}|${sim.characters.map((c) => (c.alive ? 1 : 0)).join('')}`;
+    const left = Math.max(0, ROUND_TIME_LIMIT - rules.roundTime);
+    const clock = rules.phase === 'fight' ? `${Math.floor(rules.roundTime / 60)}:${String(Math.floor(rules.roundTime % 60)).padStart(2, '0')}` : '';
+    const timeText = rules.phase === 'fight' && left < 30 ? ` · ${Math.ceil(left)}s left!` : clock ? ` · ${clock}` : '';
+    const key = `${rules.phase}|${rules.round}|${rules.scores.join(',')}|${sim.characters.map((c) => (c.alive ? 1 : 0)).join('')}|${timeText}|${sim.arena.id}`;
     if (key === this.scoreKey) {
       // unchanged
     } else if (rules.phase !== 'sandbox') {
       this.scoreKey = key;
       this.scoreEl.replaceChildren(
-        h('div', { class: 'round' }, `Round ${rules.round}`),
+        h('div', { class: `round ${left < 30 && rules.phase === 'fight' ? 'urgent' : ''}` }, `${sim.arena.name} · Round ${rules.round}${timeText}`),
         ...this.game.fighters.map((f, i) =>
           h(
             'div',

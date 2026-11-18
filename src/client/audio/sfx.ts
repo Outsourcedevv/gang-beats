@@ -4,6 +4,11 @@
 export class Sfx {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
+  /** Sound effects + ambience. */
+  private sfxBus: GainNode | null = null;
+  private musicBus: GainNode | null = null;
+  private sfxVolume = 1;
+  private musicVolume = 0.6;
   private noiseBuf: AudioBuffer | null = null;
   private ambience: AudioNode[] = [];
   private volume = 0.7;
@@ -20,6 +25,12 @@ export class Sfx {
     this.ctx = new Ctx();
     this.master = this.ctx.createGain();
     this.master.gain.value = this.volume;
+    this.sfxBus = this.ctx.createGain();
+    this.sfxBus.gain.value = this.sfxVolume;
+    this.sfxBus.connect(this.master);
+    this.musicBus = this.ctx.createGain();
+    this.musicBus.gain.value = this.musicVolume * 0.5;
+    this.musicBus.connect(this.master);
     const comp = this.ctx.createDynamicsCompressor();
     comp.threshold.value = -14;
     comp.ratio.value = 4;
@@ -28,6 +39,22 @@ export class Sfx {
     this.noiseBuf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
     const d = this.noiseBuf.getChannelData(0);
     for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    // Music requested before audio was allowed to start: start it now.
+    if (this.musicTheme) {
+      const t = this.musicTheme;
+      this.musicTheme = null;
+      this.setMusic(t);
+    }
+  }
+
+  setSfxVolume(v: number): void {
+    this.sfxVolume = v;
+    if (this.sfxBus) this.sfxBus.gain.value = v;
+  }
+
+  setMusicVolume(v: number): void {
+    this.musicVolume = v;
+    if (this.musicBus) this.musicBus.gain.value = v * 0.5;
   }
 
   setVolume(v: number): void {
@@ -58,7 +85,7 @@ export class Sfx {
     const g = ctx.createGain();
     g.gain.setValueAtTime(gain, t);
     g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-    src.connect(filt).connect(g).connect(this.master!);
+    src.connect(filt).connect(g).connect(this.sfxBus!);
     src.start(t, Math.random() * 0.5, dur + 0.05);
   }
 
@@ -73,7 +100,7 @@ export class Sfx {
     g.gain.setValueAtTime(0.0001, t);
     g.gain.exponentialRampToValueAtTime(gain, t + attack);
     g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-    o.connect(g).connect(this.master!);
+    o.connect(g).connect(this.sfxBus!);
     o.start(t);
     o.stop(t + dur + 0.05);
   }
@@ -119,7 +146,7 @@ export class Sfx {
     g.gain.exponentialRampToValueAtTime(0.001, t + dur);
     o.connect(f1).connect(g);
     o.connect(f2).connect(g);
-    g.connect(this.master!);
+    g.connect(this.sfxBus!);
     o.start(t);
     o.stop(t + dur + 0.05);
   }
@@ -335,7 +362,7 @@ export class Sfx {
     f.frequency.value = freq;
     const g = ctx.createGain();
     g.gain.value = gain;
-    src.connect(f).connect(g).connect(this.master!);
+    src.connect(f).connect(g).connect(this.sfxBus!);
     src.start();
     this.ambience.push(src, g);
     if (lfoRate) {
@@ -359,7 +386,7 @@ export class Sfx {
     lp.frequency.value = 300;
     const g = ctx.createGain();
     g.gain.value = gain;
-    o.connect(lp).connect(g).connect(this.master!);
+    o.connect(lp).connect(g).connect(this.sfxBus!);
     o.start();
     this.ambience.push(o, g);
   }
@@ -383,14 +410,6 @@ export class Sfx {
         break;
       case 'funfair': {
         this.loopNoise('lowpass', 500, 0.05, 0.11, 0.04);
-        // A wonky fairground waltz, very quietly.
-        const notes = [523, 659, 784, 659, 587, 698, 880, 698, 523, 659, 784, 1047, 988, 784, 659, 587];
-        let i = 0;
-        this.ambienceTimer = setInterval(() => {
-          const f = notes[i++ % notes.length] * (1 + (Math.random() - 0.5) * 0.01);
-          this.tone('triangle', f, f, 0.32, 0.035);
-          if (i % 3 === 1) this.tone('sine', notes[(i + 8) % notes.length] / 4, notes[(i + 8) % notes.length] / 4, 0.4, 0.03);
-        }, 260);
         break;
       }
       default:
@@ -398,4 +417,120 @@ export class Sfx {
         this.loopTone('sine', 55, 0.015);
     }
   }
+
+  // ------------------------------------------------------------------ music
+  private musicTheme: string | null = null;
+  private musicTimer: ReturnType<typeof setInterval> | null = null;
+  private nextNote = 0;
+  private stepIdx = 0;
+
+  /** Background music for a theme ('menu' or a map theme), or null for silence. */
+  setMusic(theme: string | null): void {
+    if (theme === this.musicTheme && (this.musicTimer || !this.ctx)) return;
+    this.musicTheme = theme;
+    if (this.musicTimer) clearInterval(this.musicTimer);
+    this.musicTimer = null;
+    if (!theme || !this.ctx) return;
+    this.nextNote = this.ctx.currentTime + 0.1;
+    this.stepIdx = 0;
+    this.musicTimer = setInterval(() => this.scheduleMusic(), 50);
+  }
+
+  private note(type: OscillatorType, midi: number, when: number, dur: number, gain: number, cutoff = 2400): void {
+    const ctx = this.ctx!;
+    const f = 440 * 2 ** ((midi - 69) / 12);
+    const o = ctx.createOscillator();
+    o.type = type;
+    o.frequency.value = f;
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = cutoff;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, when);
+    g.gain.exponentialRampToValueAtTime(gain, when + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, when + dur);
+    o.connect(lp).connect(g).connect(this.musicBus!);
+    o.start(when);
+    o.stop(when + dur + 0.05);
+  }
+
+  private drum(kind: 'kick' | 'snare' | 'hat' | 'clank', when: number, gain: number): void {
+    const ctx = this.ctx!;
+    if (kind === 'kick') {
+      const o = ctx.createOscillator();
+      o.frequency.setValueAtTime(140, when);
+      o.frequency.exponentialRampToValueAtTime(40, when + 0.15);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(gain, when);
+      g.gain.exponentialRampToValueAtTime(0.001, when + 0.2);
+      o.connect(g).connect(this.musicBus!);
+      o.start(when);
+      o.stop(when + 0.25);
+      return;
+    }
+    const src = ctx.createBufferSource();
+    src.buffer = this.noiseBuf;
+    const f = ctx.createBiquadFilter();
+    f.type = kind === 'hat' ? 'highpass' : 'bandpass';
+    f.frequency.value = kind === 'hat' ? 7000 : kind === 'clank' ? 2600 : 1800;
+    f.Q.value = kind === 'clank' ? 8 : 0.8;
+    const g = ctx.createGain();
+    const dur = kind === 'hat' ? 0.04 : kind === 'clank' ? 0.12 : 0.14;
+    g.gain.setValueAtTime(gain, when);
+    g.gain.exponentialRampToValueAtTime(0.001, when + dur);
+    src.connect(f).connect(g).connect(this.musicBus!);
+    src.start(when, Math.random(), dur + 0.02);
+  }
+
+  private scheduleMusic(): void {
+    const ctx = this.ctx;
+    if (!ctx || !this.musicTheme) return;
+    const T = MUSIC[this.musicTheme] ?? MUSIC.menu;
+    const sixteenth = 60 / T.bpm / 4;
+    while (this.nextNote < ctx.currentTime + 0.2) {
+      const step = this.stepIdx % 16;
+      const bar = Math.floor(this.stepIdx / 16);
+      const chord = T.chords[bar % T.chords.length].map((n) => n + T.root);
+      const t = this.nextNote;
+      if (T.kick.includes(step)) this.drum('kick', t, 0.5);
+      if (T.snare.includes(step)) this.drum(T.metal ? 'clank' : 'snare', t, 0.22);
+      if (T.hats && step % 2 === 0) this.drum('hat', t, 0.05);
+      if (T.bass.includes(step)) this.note(T.bassWave, chord[0] - 24, t, sixteenth * 3, 0.16, 700);
+      if (step % T.arpEvery === 0) {
+        const n = chord[(step / T.arpEvery) % chord.length] + 12 * T.arpOctave;
+        this.note(T.leadWave, n, t, sixteenth * T.arpEvery * 0.9, 0.06);
+      }
+      if (step === 0) for (const n of chord) this.note('sine', n, t, sixteenth * 15, 0.025, 1200);
+      this.nextNote += sixteenth;
+      this.stepIdx++;
+    }
+  }
 }
+
+interface MusicTheme {
+  bpm: number;
+  root: number;
+  chords: number[][];
+  kick: number[];
+  snare: number[];
+  hats: boolean;
+  bass: number[];
+  bassWave: OscillatorType;
+  leadWave: OscillatorType;
+  arpEvery: number;
+  arpOctave: number;
+  metal?: boolean;
+}
+
+const MIN7 = (r: number) => [r, r + 3, r + 7, r + 10];
+const MAJ = (r: number) => [r, r + 4, r + 7];
+const MIN = (r: number) => [r, r + 3, r + 7];
+
+/** One original procedural groove per map theme (plus the menus). */
+const MUSIC: Record<string, MusicTheme> = {
+  menu: { bpm: 92, root: 60, chords: [MAJ(0), MIN(-3), MAJ(5), MAJ(7)], kick: [0, 8], snare: [], hats: false, bass: [0, 8], bassWave: 'triangle', leadWave: 'triangle', arpEvery: 2, arpOctave: 0 },
+  'sunset-rooftop': { bpm: 100, root: 57, chords: [MIN7(0), MIN7(5), MAJ(10), MIN7(3)], kick: [0, 6, 8], snare: [4, 12], hats: true, bass: [0, 3, 8, 11], bassWave: 'triangle', leadWave: 'sine', arpEvery: 4, arpOctave: 1 },
+  factory: { bpm: 118, root: 52, chords: [MIN(0), MIN(0), MAJ(-4), MAJ(-2)], kick: [0, 4, 8, 12], snare: [6, 14], hats: true, bass: [0, 2, 4, 6, 8, 10, 12, 14], bassWave: 'square', leadWave: 'square', arpEvery: 4, arpOctave: 0, metal: true },
+  highway: { bpm: 128, root: 50, chords: [MAJ(0), MAJ(7), MIN(9), MAJ(5)], kick: [0, 8, 10], snare: [4, 12], hats: true, bass: [0, 2, 8, 10], bassWave: 'sawtooth', leadWave: 'square', arpEvery: 2, arpOctave: 1 },
+  funfair: { bpm: 138, root: 60, chords: [MAJ(0), MAJ(7), MAJ(0), MAJ(5)], kick: [0, 8], snare: [4, 12], hats: false, bass: [0, 8], bassWave: 'triangle', leadWave: 'triangle', arpEvery: 2, arpOctave: 1 },
+};

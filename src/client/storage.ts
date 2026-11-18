@@ -24,6 +24,10 @@ export interface Settings {
   mode?: ModeId;
   teamsOn?: boolean;
   teamCount?: number;
+  sfxVolume?: number;
+  musicVolume?: number;
+  cameraShake?: boolean;
+  quality?: 'auto' | 'high' | 'medium' | 'low';
   /** Online identity (random, local to this browser). */
   playerId?: string;
   playerName?: string;

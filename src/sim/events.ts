@@ -36,6 +36,7 @@ export type SimEvent =
   | { type: 'crush'; char: number; pos: Vec3 }
   | { type: 'timeUp' }
   | { type: 'respawn'; char: number }
+  | { type: 'emote'; char: number; kind: string }
   | { type: 'hillMove'; index: number }
   | { type: 'goal'; team: number; pos: Vec3 }
   | { type: 'potatoPass'; from: number; to: number }

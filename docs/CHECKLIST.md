@@ -3,7 +3,7 @@
 Status key: ✅ done and tested · 🟡 partial / basic version · ⬜ not started
 
 How things were verified: `npm test` runs the real simulation headlessly
-(63 tests, including multiplayer-server tests with real WebSocket clients); the browser build was driven with headless Chromium via Playwright
+(80 tests, including multiplayer-server tests with real WebSocket clients); the browser build was driven with headless Chromium via Playwright
 (setup → match → punching, grabbing, lifting, throwing, pause, rebinding,
 settings persistence) with no console errors; `tests/e2e/online.e2e.cjs` runs
 three separate browser clients against the real server and passes. Feel/tuning still needs
@@ -101,7 +101,7 @@ Physics ≈ 0.7–1.2 ms per step with 8 fighters.
 Server cost: ~1 ms of physics per tick for an 8-fighter room, so one server
 process can host roughly 10 busy rooms.
 
-## Stage 5 — Game modes ✅ (current)
+## Stage 5 — Game modes ✅
 
 | Mode | Status | Notes |
 | --- | --- | --- |
@@ -116,8 +116,24 @@ process can host roughly 10 busy rooms.
 | Bots understand every mode | ✅ | Don't target teammates, take the hill, fetch/carry/chase the trophy, pass or flee the bomb |
 | Works online | ✅ | Mode, teams, lives, points, hill and bomb state are in the protocol and snapshots |
 
-## Stage 6 — Menus & progression
-⬜ Main menu (Play / Customise / Settings / Statistics / Friends), XP, levels, ranks, coins, unlockable outfits/characters/emotes/victory animations (local storage first, structured for cloud saves).
+## Stage 6 — Menus & progression ✅ (current)
+
+| Feature | Status | Notes |
+| --- | --- | --- |
+| Main menu | ✅ | Play, Customise, Settings, Statistics, Friends + profile bar (level, rank, XP, coins) |
+| Play menu | ✅ | Local / Online tabs (local slots, modes, teams, maps; online quick play, rooms, codes, invites) |
+| Customisation | ✅ | Characters, colours (body/trousers/hat), hats, outfits, extras, emotes, victory animations; live 3D physics preview with "try emote/victory" |
+| Unlockable characters | ✅ | 4 starters, 6 unlocked by level or coins |
+| Emotes | ✅ | Emote key (T / gamepad Back) plays your equipped emote in-game (physics poses, synced online) |
+| Victory animations | ✅ | Round/match winners perform their chosen celebration |
+| XP, levels, ranks | ✅ | Levels 1–50, nine rank titles, level-up coin bonus |
+| Coins + shop | ✅ | Earned per match; spend on items in Customise |
+| Statistics | ✅ | Lifetime stats tracked from match events for your fighter |
+| Settings | ✅ | Volumes (master/effects/music), gameplay toggles, camera shake, graphics quality, key remapping, reset progress |
+| Friends screen | ✅ | Friend codes, presence, add/remove (uses the online server) |
+| Results screen | ✅ | XP/coin breakdown, level-up, unlocks; Rematch / Change setup / Menu (local), Back to lobby (online) |
+| Browser-local persistence | ✅ | `wobbleweights.profile.v1` + settings in localStorage, sanitised on load; `ProfileStore` interface ready for cloud saves. Not synced across devices |
+| Cosmetics online | ✅ | Loadouts sent to the server (sanitised), shown in lobbies, drive emotes/victories in the authoritative sim |
 
 ## Stage 7 — Polish
 ⬜ Music per map, more FX, LOD/perf passes, accessibility, UX polish.

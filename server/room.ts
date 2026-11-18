@@ -9,8 +9,9 @@ import { AUTO_START_SECONDS, MAX_ROOM, SNAPSHOT_EVERY } from '../src/net/protoco
 import type { ModeId } from '../src/sim/modes';
 import { MAX_TEAMS, MODES, modeDef, randomTeams } from '../src/sim/modes';
 import type { Conn } from './conn';
+import type { Loadout } from '../src/meta/cosmetics';
+import { CHARACTERS, presetLoadout } from '../src/meta/cosmetics';
 
-const FIGHTER_COUNT = 6;
 const DT = 1 / 60;
 /** Seconds after the match-winner banner before everyone returns to the lobby. */
 const RESULTS_TIME = 6;
@@ -25,7 +26,7 @@ interface Member {
 
 interface Slot {
   name: string;
-  fighter: number;
+  loadout: Loadout;
   memberId: string | null;
   conn: Conn | null;
   bot: Bot | null;
@@ -68,12 +69,13 @@ class Match {
       resume,
       mode: this.mode,
       teams: this.teams,
+      looks: this.slots.map((s) => ({ emote: s.loadout.emote, victory: s.loadout.victory })),
       nextArena: rotate ? (round) => this.rotation[(round - 1) % this.rotation.length] : undefined,
     });
   }
 
   slotInfo(): SlotInfo[] {
-    return this.slots.map((s) => ({ name: s.name, fighter: s.fighter, memberId: s.memberId, bot: !!s.bot }));
+    return this.slots.map((s) => ({ name: s.name, loadout: s.loadout, memberId: s.memberId, bot: !!s.bot }));
   }
 
   input(conn: Conn, data: Uint8Array): void {
@@ -207,7 +209,7 @@ export class Room {
     const members: MemberInfo[] = this.members.map((m, i) => ({
       id: m.conn.id,
       name: m.conn.name,
-      fighter: m.conn.fighter,
+      loadout: m.conn.loadout,
       ready: m.ready,
       host: i === 0,
       spectating: m.spectating,
@@ -316,23 +318,22 @@ export class Room {
     if (best === 0) pool = ARENAS;
     const arena = pool[Math.floor(Math.random() * pool.length)];
 
-    const used = new Set<number>();
+    const used = new Set<string>();
     const slots: Slot[] = this.members.map((m) => {
-      // Two players on the same fighter would be indistinguishable: give the later one the next free look.
-      let f = m.conn.fighter;
-      while (used.has(f) && used.size < FIGHTER_COUNT) f = (f + 1) % FIGHTER_COUNT;
-      used.add(f);
+      used.add(m.conn.loadout.character);
       m.spectating = false;
-      return { name: m.conn.name, fighter: f, memberId: m.conn.id, conn: m.conn, bot: null, moveX: 0, moveZ: 0, held: 0, latch: 0 };
+      return { name: m.conn.name, loadout: m.conn.loadout, memberId: m.conn.id, conn: m.conn, bot: null, moveX: 0, moveZ: 0, held: 0, latch: 0 };
     });
     const bots = Math.min(this.settings.bots, MAX_ROOM - slots.length);
     const botNames = ['Bot Bonk', 'Bot Wobble', 'Bot Splat', 'Bot Squish', 'Bot Thud', 'Bot Plop', 'Bot Boing'];
     for (let b = 0; b < bots; b++) {
+      // Bots wear preset characters nobody else is using.
       let f = 0;
-      while (used.has(f) && f < FIGHTER_COUNT - 1) f++;
-      used.add(f);
+      while (used.has(CHARACTERS[f % CHARACTERS.length].id) && f < CHARACTERS.length) f++;
+      const loadout = presetLoadout(f);
+      used.add(loadout.character);
       const index = slots.length;
-      slots.push({ name: botNames[b % botNames.length], fighter: f, memberId: null, conn: null, bot: new Bot(index, (Math.random() * 1e9) | 0, 0.45 + Math.random() * 0.3), moveX: 0, moveZ: 0, held: 0, latch: 0 });
+      slots.push({ name: botNames[b % botNames.length], loadout, memberId: null, conn: null, bot: new Bot(index, (Math.random() * 1e9) | 0, 0.45 + Math.random() * 0.3), moveX: 0, moveZ: 0, held: 0, latch: 0 });
     }
     // Teams: players keep their pick, bots fill the smallest teams.
     const def = modeDef(this.settings.mode);

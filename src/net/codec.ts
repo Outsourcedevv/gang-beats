@@ -8,7 +8,7 @@ import { MSG_INPUT, MSG_SNAPSHOT } from './protocol';
 
 // Compact binary encodings for the two high-frequency messages.
 
-const BUTTONS = ['jump', 'punch', 'grab', 'lift', 'sprint', 'kick', 'headbutt', 'dive'] as const;
+const BUTTONS = ['jump', 'punch', 'grab', 'lift', 'sprint', 'kick', 'headbutt', 'dive', 'emote'] as const;
 
 export function buttonMask(inp: PlayerInput): number {
   let m = 0;
@@ -26,9 +26,11 @@ export function encodeInput(seq: number, inp: PlayerInput, pressed: number): Arr
   v.setUint16(1, seq & 0xffff, true);
   v.setInt8(3, Math.round(Math.max(-1, Math.min(1, inp.moveX)) * 127));
   v.setInt8(4, Math.round(Math.max(-1, Math.min(1, inp.moveZ)) * 127));
-  v.setUint8(5, buttonMask(inp));
+  const held = buttonMask(inp);
+  v.setUint8(5, held & 0xff);
   v.setUint8(6, pressed & 0xff);
-  v.setUint8(7, 0);
+  // Ninth button (emote): held in bit 0, pressed in bit 1.
+  v.setUint8(7, ((held >> 8) & 1) | (((pressed >> 8) & 1) << 1));
   return buf;
 }
 
@@ -44,7 +46,14 @@ export function decodeInput(data: ArrayBufferLike | Uint8Array): DecodedInput | 
   const u8 = data instanceof Uint8Array ? data : new Uint8Array(data);
   if (u8.byteLength < 8 || u8[0] !== MSG_INPUT) return null;
   const v = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
-  return { seq: v.getUint16(1, true), moveX: v.getInt8(3) / 127, moveZ: v.getInt8(4) / 127, held: v.getUint8(5), pressed: v.getUint8(6) };
+  const hi = v.getUint8(7);
+  return {
+    seq: v.getUint16(1, true),
+    moveX: v.getInt8(3) / 127,
+    moveZ: v.getInt8(4) / 127,
+    held: v.getUint8(5) | ((hi & 1) << 8),
+    pressed: v.getUint8(6) | (((hi >> 1) & 1) << 8),
+  };
 }
 
 /** Turn held+latched buttons into a sim input. */

@@ -12,6 +12,7 @@ export interface PlayerInput {
   kick: boolean;
   headbutt: boolean;
   dive: boolean;
+  emote: boolean;
 }
 
 export const emptyInput = (): PlayerInput => ({
@@ -25,6 +26,7 @@ export const emptyInput = (): PlayerInput => ({
   kick: false,
   headbutt: false,
   dive: false,
+  emote: false,
 });
 
 export function copyInput(dst: PlayerInput, src: PlayerInput): void {
@@ -38,4 +40,5 @@ export function copyInput(dst: PlayerInput, src: PlayerInput): void {
   dst.kick = src.kick;
   dst.headbutt = src.headbutt;
   dst.dive = src.dive;
+  dst.emote = src.emote;
 }

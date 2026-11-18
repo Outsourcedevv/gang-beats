@@ -1,8 +1,9 @@
-// Original fighter presets (colours + hat). Stage 6 turns this into the full
-// cosmetics / unlock system; for now these are the selectable characters.
+import type { AccessoryId, EmoteId, EyeStyle, HatId, Loadout, OutfitId, VictoryId } from '../../meta/cosmetics';
+import { CHARACTERS, characterById, presetLoadout } from '../../meta/cosmetics';
 
-export type HatKind = 'beanie' | 'tophat' | 'cone' | 'headphones' | 'none';
-export type EyeStyle = 'round' | 'sleepy' | 'wide';
+// Everything the renderer needs to draw one fighter, derived from a Loadout.
+
+export type HatKind = HatId;
 
 export interface FighterLook {
   id: string;
@@ -10,19 +11,37 @@ export interface FighterLook {
   body: number;
   pants: number;
   shoes: number;
-  hat: HatKind;
+  hat: HatId;
   hatColor: number;
   hatAccent: number;
   eyes: EyeStyle;
   /** Voice pitch multiplier for grunts. */
   voice: number;
+  outfit: OutfitId;
+  accessory: AccessoryId;
+  emote: EmoteId;
+  victory: VictoryId;
 }
 
-export const FIGHTERS: FighterLook[] = [
-  { id: 'mallow', name: 'Mallow', body: 0xff8fb1, pants: 0x5a4bd1, shoes: 0x2b2440, hat: 'beanie', hatColor: 0x2fc3a5, hatAccent: 0xffffff, eyes: 'round', voice: 1.25 },
-  { id: 'gumbo', name: 'Gumbo', body: 0x46c9e8, pants: 0xffb02e, shoes: 0x33261c, hat: 'tophat', hatColor: 0x2a2a35, hatAccent: 0xe8473f, eyes: 'sleepy', voice: 0.8 },
-  { id: 'pudding', name: 'Pudding', body: 0xffd84a, pants: 0x3c8f4e, shoes: 0x3a2a1a, hat: 'cone', hatColor: 0xff6a1a, hatAccent: 0xffffff, eyes: 'wide', voice: 1.05 },
-  { id: 'jamjar', name: 'Jamjar', body: 0xa07bf0, pants: 0x2d2f3a, shoes: 0xf2f2f2, hat: 'headphones', hatColor: 0xff4f6d, hatAccent: 0x2d2f3a, eyes: 'round', voice: 0.95 },
-  { id: 'pickle', name: 'Pickle', body: 0x8fdc5a, pants: 0x8a4fff, shoes: 0x222222, hat: 'none', hatColor: 0, hatAccent: 0, eyes: 'wide', voice: 1.15 },
-  { id: 'brick', name: 'Brick', body: 0xe86a4a, pants: 0x3a5ba8, shoes: 0x1e1e24, hat: 'beanie', hatColor: 0xf2c94c, hatAccent: 0xe86a4a, eyes: 'sleepy', voice: 0.7 },
-];
+export function lookFrom(l: Loadout, name?: string): FighterLook {
+  const c = characterById(l.character);
+  return {
+    id: c.id,
+    name: name ?? c.name,
+    body: l.body,
+    pants: l.pants,
+    shoes: c.shoes,
+    hat: l.hat,
+    hatColor: l.hatColor,
+    hatAccent: c.hatAccent,
+    eyes: c.eyes,
+    voice: c.voice,
+    outfit: l.outfit,
+    accessory: l.accessory,
+    emote: l.emote,
+    victory: l.victory,
+  };
+}
+
+/** Preset characters (local guests, bots). */
+export const FIGHTERS: FighterLook[] = CHARACTERS.map((_, i) => lookFrom(presetLoadout(i)));

@@ -1,5 +1,6 @@
 import type { SimEvent } from '../sim/events';
 import type { ModeId } from '../sim/modes';
+import type { Loadout } from '../meta/cosmetics';
 
 // Wire protocol shared by the browser client and the Node server.
 // Lobby/control traffic is JSON text frames; inputs and snapshots are binary.
@@ -18,7 +19,7 @@ export type MapMode = 'vote' | 'rotate';
 export interface MemberInfo {
   id: string;
   name: string;
-  fighter: number;
+  loadout: Loadout;
   ready: boolean;
   host: boolean;
   /** Joined while a match was running: watching until the next one. */
@@ -52,7 +53,7 @@ export interface RoomInfo {
 
 export interface SlotInfo {
   name: string;
-  fighter: number;
+  loadout: Loadout;
   memberId: string | null;
   bot: boolean;
 }
@@ -66,8 +67,8 @@ export interface FriendStatus {
 
 // ------------------------------------------------------------ client → server
 export type ClientMsg =
-  | { t: 'hello'; v: number; playerId: string; name: string; fighter: number }
-  | { t: 'profile'; name: string; fighter: number }
+  | { t: 'hello'; v: number; playerId: string; name: string; loadout: Loadout }
+  | { t: 'profile'; name: string; loadout: Loadout }
   | { t: 'quickPlay' }
   | { t: 'create'; private: boolean }
   | { t: 'join'; code: string }

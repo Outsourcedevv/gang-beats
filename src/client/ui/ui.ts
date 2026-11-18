@@ -13,6 +13,12 @@ import type { Settings } from '../storage';
 import { saveSettings } from '../storage';
 import type { Sfx } from '../audio/sfx';
 import { NetClient } from '../net/netClient';
+import { MetaUI } from './menus';
+import type { MetaScreen } from './menus';
+import type { ProfileService } from '../profile';
+import { applyReport, isUnlocked, levelInfo } from '../../meta/progression';
+import { itemById } from '../../meta/cosmetics';
+import { lookFrom } from '../render/fighters';
 import { OnlineUI } from './online';
 
 type Attrs = Record<string, string | number | boolean | ((e: Event) => void)>;
@@ -44,7 +50,8 @@ const OUT_LINES: Record<EliminationCause, string> = {
 
 const DEVICE_ORDER: DeviceId[] = ['kbA', 'kbB', 'pad0', 'pad1', 'pad2', 'pad3', 'bot', 'off'];
 
-export const GAME_TITLE = 'Wobble Weights';
+export { GAME_TITLE } from './title';
+import { GAME_TITLE } from './title';
 
 /**
  * All DOM UI: the fighter setup screen, controls/rebinding, pause menu and the
@@ -63,7 +70,7 @@ export class UI {
   private tagsEl!: HTMLElement;
   private statsEl!: HTMLElement;
   private bannerTimer = 0;
-  private controlsReturn: 'setup' | 'pause' = 'setup';
+  private controlsReturn: 'setup' | 'pause' | 'settings' = 'setup';
   private showStats = false;
   private scoreKey = '';
   private tab: 'local' | 'online' = 'local';
@@ -76,6 +83,7 @@ export class UI {
     private readonly input: InputManager,
     private readonly sfx: Sfx,
     private readonly settings: Settings,
+    private readonly profiles: ProfileService,
   ) {
     this.root = document.getElementById('ui')!;
     this.buildHud();
@@ -100,6 +108,7 @@ export class UI {
         this.sfx.startAmbience();
         this.game.paused = false;
         this.game.startOnline(this.net, m.arena, m.epoch, m.slots, m.you, m.mode, m.sides);
+        this.game.track(m.you);
         this.buildCards();
         this.scoreKey = '';
         this.show('hud');
@@ -110,9 +119,25 @@ export class UI {
         this.game.stop();
         this.game.paused = false;
         this.tab = 'online';
-        this.show('setup');
+        // Keep the results screen up if it's showing; it leads back to the lobby.
+        if (this.screen !== 'results') this.show('setup');
       },
-    }, this.root);
+    }, this.root, profiles);
+    this.meta = new MetaUI(this.root, game, profiles, settings, sfx, {
+      play: () => this.show('setup'),
+      controls: () => {
+        this.controlsReturn = 'settings';
+        this.show('controls');
+      },
+      friendsPanel: () => this.online.friendsPanel(false),
+      activateOnline: () => this.online.activate(),
+      show: (sc) => this.show(sc),
+    });
+    const onlineChange = this.net.onChange;
+    this.net.onChange = () => {
+      onlineChange?.();
+      if (this.screen === 'friends') this.meta.render('friends');
+    };
     game.listener = { onEvent: (ev) => this.onEvent(ev) };
     input.onPause = () => this.togglePause();
     window.addEventListener('keydown', (e) => {
@@ -124,18 +149,30 @@ export class UI {
       }
     });
     this.game.preview(settings.map ?? 'rotate');
-    this.show('setup');
+    this.game.setCameraShake(settings.cameraShake ?? true);
+    this.game.setQuality(settings.quality ?? 'auto');
+    sfx.setSfxVolume(settings.sfxVolume ?? 1);
+    sfx.setMusicVolume(settings.musicVolume ?? 0.6);
+    sfx.setMusic('menu');
+    this.show(new URLSearchParams(location.search).get('room') ? 'setup' : 'menu');
     requestAnimationFrame(this.tick);
     window.addEventListener('gamepadconnected', () => this.renderSetup());
     window.addEventListener('gamepaddisconnected', () => this.renderSetup());
   }
 
   // ---------------------------------------------------------------------------
-  private show(screen: 'setup' | 'controls' | 'pause' | 'hud'): void {
+  private screen: string = 'menu';
+  private meta!: MetaUI;
+
+  private show(screen: 'setup' | 'controls' | 'pause' | 'hud' | MetaScreen): void {
+    this.screen = screen;
+    for (const [name, el] of Object.entries(this.meta?.screens ?? {})) el.classList.toggle('hidden', name !== screen);
+    if (this.meta && screen !== 'results' && screen in this.meta.screens) this.meta.render(screen as MetaScreen);
+    if (screen !== 'customise') this.game.stopPreview();
     this.setupEl.classList.toggle('hidden', screen !== 'setup');
     this.controlsEl.classList.toggle('hidden', screen !== 'controls');
     this.pauseEl.classList.toggle('hidden', screen !== 'pause');
-    this.hudEl.classList.toggle('hidden', screen === 'setup');
+    this.hudEl.classList.toggle('hidden', screen !== 'hud' && screen !== 'pause' && !(screen === 'controls' && this.game.running));
     if (screen === 'setup') this.renderSetup();
     if (screen === 'controls') this.renderControls();
   }
@@ -160,7 +197,13 @@ export class UI {
         },
         label,
       );
-    return h('div', { class: 'tabs' }, tab('local', 'Local play'), tab('online', 'Online'));
+    return h(
+      'div',
+      { class: 'tabs' },
+      h('button', { class: 'btn tiny back', id: 'setup-back', onclick: () => this.show('menu') }, '← Menu'),
+      tab('local', 'Local play'),
+      tab('online', 'Online'),
+    );
   }
 
   /** Re-render while keeping focus/caret in a text field the player is typing in. */
@@ -190,8 +233,13 @@ export class UI {
     const s = this.settings;
     const pads = this.input.connectedPads();
     const active = s.slots.filter((x) => x.device !== 'off').length;
+    const prof = this.profiles.profile;
+    const unlockedChar = (k: number) => isUnlocked(prof, itemById(`character:${FIGHTERS[k].id}`)!);
     const slots = s.slots.map((slot, i) => {
-      const look = FIGHTERS[slot.fighter];
+      // P1 (a human) wears your customised look; everyone else picks a preset.
+      const mine = i === 0 && slot.device !== 'bot' && slot.device !== 'off';
+      if (!mine && !unlockedChar(slot.fighter)) slot.fighter = 0;
+      const look = mine ? lookFrom(prof.loadout, s.playerName ?? 'You') : FIGHTERS[slot.fighter];
       const off = slot.device === 'off';
       const select = h(
         'select',
@@ -222,7 +270,7 @@ export class UI {
         let f = slot.fighter;
         for (let n = 0; n < FIGHTERS.length; n++) {
           f = (f + dir + FIGHTERS.length) % FIGHTERS.length;
-          if (!taken.has(f)) break;
+          if (!taken.has(f) && unlockedChar(f)) break;
         }
         slot.fighter = f;
         this.sfx.click();
@@ -240,13 +288,15 @@ export class UI {
           h('div', { class: 'av-head' }, h('i'), h('i')),
           h('div', { class: 'av-body' }),
         ),
-        h(
-          'div',
-          { class: 'fighter-pick' },
-          h('button', { class: 'arrow', onclick: cycle(-1), 'aria-label': 'Previous fighter' }, '◀'),
-          h('span', { class: 'fighter-name' }, look.name),
-          h('button', { class: 'arrow', onclick: cycle(1), 'aria-label': 'Next fighter' }, '▶'),
-        ),
+        mine
+          ? h('div', { class: 'fighter-pick' }, h('span', { class: 'fighter-name' }, `${look.name} (your look)`), h('button', { class: 'btn tiny', onclick: () => this.show('customise') }, 'Customise'))
+          : h(
+              'div',
+              { class: 'fighter-pick' },
+              h('button', { class: 'arrow', onclick: cycle(-1), 'aria-label': 'Previous fighter' }, '◀'),
+              h('span', { class: 'fighter-name' }, look.name),
+              h('button', { class: 'arrow', onclick: cycle(1), 'aria-label': 'Next fighter' }, '▶'),
+            ),
         select,
         this.localTeams() && !off
           ? h(
@@ -497,7 +547,12 @@ export class UI {
     this.sfx.unlock();
     this.sfx.startAmbience();
     const active = this.settings.slots.filter((s) => s.device !== 'off');
-    const fighters = active.map((s) => ({ device: s.device, look: FIGHTERS[s.fighter] }));
+    const p1 = this.settings.slots[0];
+    const ownerSlot = p1.device !== 'off' && p1.device !== 'bot' ? p1 : null;
+    const fighters = active.map((s) =>
+      s === ownerSlot ? { device: s.device, look: lookFrom(this.profiles.profile.loadout, this.settings.playerName ?? 'You') } : { device: s.device, look: FIGHTERS[s.fighter] },
+    );
+    this.owner = ownerSlot && active.length >= 2 ? active.indexOf(ownerSlot) : -1;
     if (!fighters.length) return;
     const mode = this.settings.mode ?? 'ffa';
     let teams: number[] | undefined;
@@ -518,6 +573,7 @@ export class UI {
     this.setupError = '';
     this.game.setHoldToPunch(this.settings.holdToPunch);
     this.game.start(fighters, this.settings.map ?? 'rotate', mode, teams);
+    this.game.track(this.owner);
     this.buildCards();
     this.scoreKey = '';
     this.helpEl.classList.toggle('hidden', false);
@@ -679,6 +735,18 @@ export class UI {
             },
             'Change fighters',
           ),
+          h(
+            'button',
+            {
+              class: 'btn',
+              onclick: () => {
+                this.game.stop();
+                this.game.paused = false;
+                this.show('menu');
+              },
+            },
+            'Main menu',
+          ),
         );
     this.pauseEl.replaceChildren(panel);
   }
@@ -839,6 +907,7 @@ export class UI {
         else this.banner('Draw!', 'Nobody survived that one.', 3.4);
         break;
       case 'matchEnd':
+        this.matchFinished();
         this.banner(`${this.sideName(ev.winner)} wins the match!`, `First to ${WINS_TO_WIN_MATCH} — new match starting soon`, 6.2);
         break;
       case 'ko':
@@ -846,6 +915,76 @@ export class UI {
       default:
         break;
     }
+  }
+
+  /** Local profile owner's fighter index (or -1: nobody earns XP, e.g. bots only / practice). */
+  private owner = -1;
+
+  /** Award XP/coins for the finished match and show the results screen. */
+  private matchFinished(): void {
+    const t = this.game.tracker;
+    if (!t && this.game.online) return;
+    this.game.tracker = null;
+    const report = t?.report();
+    let result: ReturnType<typeof applyReport>;
+    if (report) {
+      result = applyReport(this.profiles.profile, report);
+      this.profiles.save();
+    } else {
+      // Nobody to credit (bots only): still offer rematch / menu.
+      const lv = levelInfo(this.profiles.profile.xp).level;
+      result = { reward: { xp: 0, coins: 0, lines: [{ label: 'No XP — your P1 fighter wasn\'t playing', xp: 0, coins: 0 }] }, levelBefore: lv, levelAfter: lv, unlocked: [] };
+    }
+    const won = report?.won ?? false;
+    const online = this.game.online;
+    setTimeout(() => {
+      if (online) {
+        this.meta.showResults(result, won, [
+          {
+            label: 'Back to lobby',
+            id: 'results-lobby',
+            primary: true,
+            run: () => {
+              this.tab = 'online';
+              if (!this.game.online) this.show('setup');
+              else this.show('hud');
+            },
+          },
+        ]);
+      } else {
+        if (!this.game.sim) return;
+        this.meta.showResults(result, won, [
+          {
+            label: 'Rematch',
+            id: 'results-rematch',
+            primary: true,
+            run: () => {
+              this.game.sim?.rules.restartMatch();
+              this.game.track(this.owner);
+              this.scoreKey = '';
+              this.show('hud');
+            },
+          },
+          {
+            label: 'Change setup',
+            id: 'results-setup',
+            run: () => {
+              this.game.stop();
+              this.show('setup');
+            },
+          },
+          {
+            label: 'Main menu',
+            id: 'results-menu',
+            run: () => {
+              this.game.stop();
+              this.show('menu');
+            },
+          },
+        ]);
+      }
+      this.show('results');
+    }, 2600);
   }
 
   private goalLine(): string {

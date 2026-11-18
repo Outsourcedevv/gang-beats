@@ -57,6 +57,8 @@ export class RoundRules {
     resume: RulesResume | undefined,
     mode: ModeId,
     sides: number[],
+    /** After the match-over screen, start a new match by itself (false: wait for restartMatch()). */
+    private readonly autoRestart = true,
   ) {
     this.mode = mode;
     this.sides = sides;
@@ -102,6 +104,13 @@ export class RoundRules {
   private endRound(winner: number): void {
     this.roundWinner = winner;
     if (winner >= 0) this.scores[winner]++;
+    // Winners celebrate (through the match-over screen if this won the match).
+    if (winner >= 0) {
+      const matchPoint = this.scores[winner] >= WINS_TO_WIN_MATCH;
+      this.sim.characters.forEach((c, i) => {
+        if (this.sides[i] === winner && c.alive) c.celebrate(ROUND_OVER_TIME + (matchPoint ? MATCH_OVER_TIME : 0));
+      });
+    }
     this.sim.emit({ type: 'roundEnd', winner });
     this.phase = 'roundOver';
     this.timer = ROUND_OVER_TIME;
@@ -265,7 +274,7 @@ export class RoundRules {
         return;
       case 'matchOver':
         this.timer -= dt;
-        if (this.timer <= 0) {
+        if (this.timer <= 0 && this.autoRestart) {
           this.scores = this.scores.map(() => 0);
           this.matchWinner = -1;
           this.startRound(1);

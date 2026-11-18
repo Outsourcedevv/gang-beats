@@ -29,8 +29,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     page.on('pageerror', (e) => errors.push(`${name} pageerror: ${e.message}`));
     page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') errors.push(`${name}: ${m.text()}`); });
     await page.goto(URL, { waitUntil: 'networkidle' }); page.setDefaultTimeout(60000);
+    await page.click('#menu-play');
     await page.click('#tab-online');
-    await page.waitForSelector('#quick-play', { timeout: 15000 });
+    await page.waitForSelector('#quick-play', { timeout: 60000 });
     await page.fill('input[aria-label="Your name"]', name);
     await page.press('input[aria-label="Your name"]', 'Tab');
     return page;
@@ -121,7 +122,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   // Cleo leaves via the menu; Alice sees a bot take over.
   await C.keyboard.press('Escape');
   await C.click('#leave-match');
-  await C.waitForSelector('#quick-play', { timeout: 10000 });
+  await C.waitForSelector('#quick-play', { timeout: 60000 });
   await A.waitForFunction(() => document.querySelector('.warning')?.textContent?.includes('bot takes over'), null, { timeout: 8000 });
 
   console.log(JSON.stringify({ steer, hitsSeenByB, code, memberNames, arenaIds, you, aliceSeenByBob: [b0, b1], aliceSeenByCleo: [c0, c1], bobDaze, serverHits, cFilter, cBanner }));

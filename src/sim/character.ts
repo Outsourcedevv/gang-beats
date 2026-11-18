@@ -35,6 +35,7 @@ import {
 } from './ragdoll';
 import type { AttackKind, SimEvent } from './events';
 import type { EliminationCause } from './arena';
+import type { EmoteId, VictoryId } from '../meta/cosmetics';
 
 type World = RAPIER_NS.World;
 type RigidBody = RAPIER_NS.RigidBody;
@@ -68,7 +69,7 @@ export interface SimContext {
 }
 
 type PunchPhase = 'idle' | 'windup' | 'strike' | 'recover';
-type Pressable = 'jump' | 'punch' | 'grab' | 'lift' | 'kick' | 'headbutt' | 'dive';
+type Pressable = 'jump' | 'punch' | 'grab' | 'lift' | 'kick' | 'headbutt' | 'dive' | 'emote';
 
 /** A whole-body move (only one at a time): kick, headbutt or dive tackle. */
 export interface BodyMove {
@@ -177,6 +178,11 @@ export class Character {
   /** Pre-step velocity of every body part (strike strength). */
   readonly partVelPre: Vec3[] = Array.from({ length: PART_COUNT }, () => ({ x: 0, y: 0, z: 0 }));
   readonly input: PlayerInput = emptyInput();
+  /** Cosmetic choices that affect animation only. */
+  emoteKind: EmoteId = 'wave';
+  victoryKind: VictoryId = 'cheer';
+  /** Emote / victory animation in progress. */
+  pose: { kind: EmoteId | VictoryId; t: number; dur: number; victory: boolean } | null = null;
   private prev: PlayerInput = emptyInput();
   private nextPunch = 0;
   private prevHeadVel: Vec3 = { x: 0, y: 0, z: 0 };
@@ -332,6 +338,10 @@ export class Character {
       }
       if (this.grounded) this.airDiveUsed = false;
       this.startMoves(ctx, pressed);
+      if (pressed('emote') && this.grounded && !this.move && !this.arms.some((a) => a.joint)) {
+        this.pose = { kind: this.emoteKind, t: 0, dur: 1.8, victory: false };
+        ctx.emit({ type: 'emote', char: this.index, kind: this.emoteKind });
+      }
     }
     this.updateMove(ctx, dt);
     this.updateClimb(dt);
@@ -375,6 +385,7 @@ export class Character {
     this.effort = Math.max(0, this.effort - dt * 3);
     if (this.arms.some((a) => a.punch === 'windup' || a.punch === 'strike') || (this.liftAmount > 0.2 && this.holdingDynamic())) this.effort = 1;
     if (this.move && this.move.phase !== 'recover') this.effort = 1;
+    this.updatePose(dt, ml, pressed);
     this.hurtTimer = Math.max(0, this.hurtTimer - dt);
     this.updateStamina(ctx, dt, ml < 0.1 && this.grounded && !this.move && !this.input.grab);
 
@@ -564,6 +575,7 @@ export class Character {
     this.airDiveUsed = false;
     this.gettingUp = false;
     this.climbing = null;
+    this.pose = null;
     this.hoverOff = 0;
     this.prevHeadVel = { x: 0, y: 0, z: 0 };
     this.prevTorsoVel = { x: 0, y: 0, z: 0 };
@@ -1329,6 +1341,91 @@ export class Character {
     }
   }
 
+  /** Round winners celebrate with their victory animation. */
+  celebrate(seconds: number): void {
+    if (this.state !== 'active') return;
+    this.pose = { kind: this.victoryKind, t: 0, dur: seconds, victory: true };
+  }
+
+  private updatePose(dt: number, moveLen: number, pressed: (k: Pressable) => boolean): void {
+    const p = this.pose;
+    if (!p) return;
+    // Emotes are cancelled by moving or attacking; victories by nothing but time.
+    const busy = moveLen > 0.3 || pressed('punch') || pressed('kick') || pressed('headbutt') || pressed('dive') || this.input.grab || this.move;
+    if (this.state !== 'active' || (!p.victory && busy)) {
+      this.pose = null;
+      return;
+    }
+    const before = p.t;
+    p.t += dt;
+    if (p.t >= p.dur) {
+      this.pose = null;
+      return;
+    }
+    const hop = (every: number, vy: number) => {
+      if (this.grounded && Math.floor(p.t / every) !== Math.floor(before / every)) {
+        for (const part of this.rag.parts) part.body.applyImpulse({ x: 0, y: part.def.mass * vy, z: 0 }, true);
+        this.hoverOff = 0.15;
+      }
+    };
+    switch (p.kind) {
+      case 'spin':
+        this.facing = wrapAngle(this.facing + dt * 7);
+        break;
+      case 'dance':
+        this.facing = wrapAngle(this.facing + Math.sin(p.t * 6) * dt * 5);
+        hop(0.45, 2.5);
+        break;
+      case 'bounce':
+        hop(0.5, 4.5);
+        break;
+      case 'cheer':
+        if (p.victory) hop(0.7, 3.5);
+        break;
+      case 'backflip':
+        if (before === 0) {
+          const right = yawDir(this.facing + Math.PI / 2);
+          for (const part of this.rag.parts) part.body.applyImpulse({ x: 0, y: part.def.mass * 7.5, z: 0 }, true);
+          this.part('torso').body.applyTorqueImpulse({ x: right.x * 9, y: 0, z: right.z * 9 }, true);
+          this.hoverOff = 0.6;
+        }
+        break;
+    }
+  }
+
+  /** Arm targets for emotes / victory poses (null: not posing). */
+  private poseArms(a: Arm): [Vec3, Vec3] | null {
+    const p = this.pose;
+    if (!p) return null;
+    const s = a.sign;
+    const right = s < 0;
+    const t = p.t;
+    switch (p.kind) {
+      case 'wave':
+        if (!right) return null;
+        return [this.dir(-0.5, 1, 0.2), this.dir(-0.4 + Math.sin(t * 12) * 0.6, 1, 0.3)];
+      case 'cheer':
+      case 'backflip':
+        return [this.dir(s * 0.35, 1, 0.1), this.dir(s * 0.3, 1, 0.15)];
+      case 'flex':
+        return [this.dir(s * 1, 0.15, 0.05), this.dir(s * 0.15, 1, 0.1)];
+      case 'dance': {
+        const k = Math.sin(t * 10 + (right ? Math.PI : 0));
+        return [this.dir(s * 0.6, k, 0.3), this.dir(s * 0.4, k + 0.3, 0.4)];
+      }
+      case 'facepalm':
+        if (!right) return null;
+        return [this.dir(-0.2, -0.1, 1), this.dir(0.15, 1, -0.25)];
+      case 'shrug':
+        return [this.dir(s * 0.8, -0.5, 0.2), this.dir(s * 0.5, 0.3, 0.7)];
+      case 'spin':
+        return [this.dir(s, 0.15, 0), this.dir(s, 0.2, 0)];
+      case 'bounce':
+        return [this.dir(s * 0.4, Math.sin(t * 9), 0.25), this.dir(s * 0.3, Math.sin(t * 9) + 0.4, 0.3)];
+    }
+    return null;
+  }
+
   private driveArms(ctx: SimContext, dt: number, muscle: number, pv: Vec3): void {
     const torso = this.part('torso').body;
     const grabbing = this.state === 'active' && this.input.grab;
@@ -1343,9 +1440,14 @@ export class Character {
       let handDir: Vec3;
       let strength = 1;
       const s = a.sign;
+      const posed = this.state === 'active' ? this.poseArms(a) : null;
       if (this.state === 'ko') {
         upperDir = this.dir(s * 0.3, -1, 0);
         handDir = upperDir;
+      } else if (posed) {
+        upperDir = posed[0];
+        handDir = posed[1];
+        strength = 1.6;
       } else if (this.move?.kind === 'dive' && this.move.phase !== 'recover') {
         // Arms out in front for the tackle.
         upperDir = this.dir(s * 0.25, 0.25, 1);

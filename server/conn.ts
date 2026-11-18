@@ -1,12 +1,14 @@
 import type { WebSocket } from 'ws';
 import type { ServerMsg } from '../src/net/protocol';
 import type { Room } from './room';
+import type { Loadout } from '../src/meta/cosmetics';
+import { defaultLoadout } from '../src/meta/cosmetics';
 
 /** One connected player. */
 export class Conn {
   id = '';
   name = 'Player';
-  fighter = 0;
+  loadout: Loadout = defaultLoadout();
   friendCode = '';
   room: Room | null = null;
   helloed = false;

@@ -14,6 +14,7 @@ import type { Vec3 } from './math';
 import { PART_COUNT, PART_INDEX } from './ragdoll';
 import { RoundRules } from './rules';
 import type { ModeId } from './modes';
+import type { EmoteId, VictoryId } from '../meta/cosmetics';
 import { sidesFor } from './modes';
 import type { WorldView } from './view';
 import type { BreakState } from './arenaRuntime';
@@ -66,6 +67,10 @@ export interface SimOptions {
   /** Game mode (default free-for-all) and team per fighter for team modes. */
   mode?: ModeId;
   teams?: number[];
+  /** Cosmetic animation choices per fighter. */
+  looks?: { emote: EmoteId; victory: VictoryId }[];
+  /** Start a fresh match automatically after the match-over screen (default true). */
+  autoRestart?: boolean;
 }
 
 /** Golden trophy for Grab the Goods. */
@@ -139,6 +144,13 @@ export class GameSim implements SimContext, ArenaHost, WorldView {
         this.bodyOwner.set(p.body.handle, o);
       }
     }
+    opts.looks?.forEach((l, i) => {
+      const c = this.characters[i];
+      if (c && l) {
+        c.emoteKind = l.emote;
+        c.victoryKind = l.victory;
+      }
+    });
     for (const c of this.characters) for (const p of c.rag.parts) this.snapBodies.push(p.body);
     for (const p of this.props) this.snapBodies.push(p.body);
     this.moverBase = this.snapBodies.length;
@@ -150,7 +162,7 @@ export class GameSim implements SimContext, ArenaHost, WorldView {
     this.currSnap = new Float32Array(n * SNAP_STRIDE);
     this.writeSnapshot(this.currSnap);
     this.prevSnap.set(this.currSnap);
-    this.rules = new RoundRules(this, !!opts.sandbox, opts.resume, this.mode, sidesFor(this.mode, opts.players, opts.teams));
+    this.rules = new RoundRules(this, !!opts.sandbox, opts.resume, this.mode, sidesFor(this.mode, opts.players, opts.teams), opts.autoRestart ?? true);
   }
 
   registerCollider(c: RAPIER_NS.Collider, owner: Owner): void {

@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { GameSim, trophyDef } from '../sim/game';
 import type { ModeId } from '../sim/modes';
 import { ModeView } from './render/modeView';
+import { MatchTracker } from './matchTracker';
 import type { ArenaDef } from '../sim/arena';
 import { ARENAS, arenaById } from '../sim/arenas';
 import { Bot } from '../sim/bot';
@@ -20,7 +21,7 @@ import type { ThemeView } from './render/themes';
 import { CharacterView } from './render/characterView';
 import { CameraRig } from './render/cameraRig';
 import { Effects } from './render/fx';
-import { FIGHTERS } from './render/fighters';
+import { FIGHTERS, lookFrom } from './render/fighters';
 import type { FighterLook } from './render/fighters';
 import type { InputManager, DeviceId } from './input/devices';
 import type { Sfx } from './audio/sfx';
@@ -123,13 +124,14 @@ export class Game {
   /** Begin showing an online match (the server runs the simulation). */
   startOnline(net: NetClient, arenaId: string, epoch: number, slots: SlotInfo[], you: number, mode: ModeId = 'ffa', sides?: number[]): void {
     this.stop();
-    this.fighters = slots.map((s, i) => ({ device: 'net' as const, look: FIGHTERS[s.fighter] ?? FIGHTERS[0], label: s.bot ? 'Bot' : i === you ? 'You' : 'Online player' }));
-    this.fighters.forEach((f, i) => (f.look = { ...f.look, name: slots[i].name }));
+    this.stopPreview();
+    this.fighters = slots.map((s, i) => ({ device: 'net' as const, look: lookFrom(s.loadout, s.name), label: s.bot ? 'Bot' : i === you ? 'You' : 'Online player' }));
     this.net = new NetMatch(net, arenaId, epoch, slots, you, mode, sides);
     this.mode = mode;
     this.showArena(this.net.world.arena);
     this.makeViews(this.fighters);
     this.refreshMode();
+    this.sfx.setMusic(this.net.world.arena.theme);
     this.paused = false;
     this.rig.snap([new THREE.Vector3(0, 1, 0)]);
   }
@@ -140,6 +142,8 @@ export class Game {
     this.net.changeArena(arenaId, epoch);
     this.showArena(this.net.world.arena);
     this.refreshMode();
+    this.tracker?.arena(arenaId);
+    this.sfx.setMusic(this.net.world.arena.theme);
   }
 
   /** Swap the visible arena (scenery, theme, lighting). */
@@ -167,6 +171,15 @@ export class Game {
     return arenaById(choice) ?? ARENAS[0];
   }
 
+  /** Records the profile owner's match for XP/stats (null when nobody to credit). */
+  tracker: MatchTracker | null = null;
+
+  /** Begin tracking fighter `me` (the profile owner) for progression. */
+  track(me: number): void {
+    const w = this.world;
+    this.tracker = w && me >= 0 ? new MatchTracker(me, w.rules.sides, w.rules.mode, this.online, w.arena.id) : null;
+  }
+
   private makeSim(arena: ArenaDef, resume?: { round: number; scores: number[] }): GameSim {
     const sandbox = this.fighters.length < 2;
     const sim = new GameSim({
@@ -177,6 +190,9 @@ export class Game {
       resume,
       mode: this.mode,
       teams: this.teams,
+      looks: this.fighters.map((f) => ({ emote: f.look.emote, victory: f.look.victory })),
+      // Local matches wait on the results screen (Rematch / Menu).
+      autoRestart: false,
       nextArena: this.mapChoice === 'rotate' ? (round) => this.rotation[(round - 1) % this.rotation.length] : undefined,
     });
     for (const c of sim.characters) c.holdToPunch = this.holdToPunch;
@@ -195,6 +211,7 @@ export class Game {
 
   start(fighters: Fighter[], map: MapChoice = this.mapChoice, mode: ModeId = 'ffa', teams?: number[]): void {
     this.stop();
+    this.stopPreview();
     this.fighters = fighters;
     this.mapChoice = map;
     this.mode = mode;
@@ -203,6 +220,7 @@ export class Game {
     this.showArena(arena);
     this.sim = this.makeSim(arena);
     this.refreshMode();
+    this.sfx.setMusic(arena.theme);
     this.makeViews(fighters);
     this.bots = fighters.map((f, i) => (f.device === 'bot' ? new Bot(i, (Math.random() * 1e9) | 0, 0.45 + Math.random() * 0.35) : null));
     this.paused = false;
@@ -223,7 +241,49 @@ export class Game {
     this.modeView?.dispose(this.gfx.scene);
     this.modeView = null;
     this.arenaView.setExtraProps([]);
+    this.tracker = null;
+    this.sfx.setMusic('menu');
     this.gfx.renderer.domElement.style.filter = '';
+  }
+
+  setCameraShake(on: boolean): void {
+    this.rig.shakeScale = on ? 1 : 0;
+  }
+
+  /** Graphics quality: resolution and shadows. 'auto' steps down when the frame rate drops. */
+  quality: 'auto' | 'high' | 'medium' | 'low' = 'auto';
+  private autoLevel: 'high' | 'medium' | 'low' = 'high';
+  private slowTime = 0;
+
+  setQuality(q: 'auto' | 'high' | 'medium' | 'low'): void {
+    this.quality = q;
+    this.applyQuality(q === 'auto' ? this.autoLevel : q);
+  }
+
+  private applyQuality(level: 'high' | 'medium' | 'low'): void {
+    const r = this.gfx.renderer;
+    const dpr = Math.min(window.devicePixelRatio, 2);
+    r.setPixelRatio(level === 'high' ? dpr : level === 'medium' ? Math.min(1, dpr) : 0.6);
+    const shadows = level !== 'low';
+    if (r.shadowMap.enabled !== shadows) {
+      r.shadowMap.enabled = shadows;
+      this.gfx.scene.traverse((o) => {
+        const m = (o as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
+        if (m) (Array.isArray(m) ? m : [m]).forEach((x) => (x.needsUpdate = true));
+      });
+    }
+    this.gfx.resize();
+  }
+
+  /** Auto quality: after a few seconds under ~40 fps, drop a level. */
+  private autoQuality(dt: number): void {
+    if (this.quality !== 'auto' || this.autoLevel === 'low') return;
+    this.slowTime = this.fps < 40 ? this.slowTime + dt : Math.max(0, this.slowTime - dt);
+    if (this.slowTime > 4) {
+      this.slowTime = 0;
+      this.autoLevel = this.autoLevel === 'high' ? 'medium' : 'low';
+      this.applyQuality(this.autoLevel);
+    }
   }
 
   setHoldToPunch(v: boolean): void {
@@ -247,7 +307,7 @@ export class Game {
     const out = emptyInput();
     out.moveX = Math.max(-1, Math.min(1, a.moveX + b.moveX));
     out.moveZ = Math.max(-1, Math.min(1, a.moveZ + b.moveZ));
-    for (const k of ['jump', 'punch', 'grab', 'lift', 'sprint', 'kick', 'headbutt', 'dive'] as const) out[k] = a[k] || b[k];
+    for (const k of ['jump', 'punch', 'grab', 'lift', 'sprint', 'kick', 'headbutt', 'dive', 'emote'] as const) out[k] = a[k] || b[k];
     return out;
   }
 
@@ -257,6 +317,7 @@ export class Game {
     this.last = t;
     dt = Math.min(dt, 0.1);
     this.fps += (1 / Math.max(dt, 1e-3) - this.fps) * 0.05;
+    this.autoQuality(dt);
     const sim = this.sim;
     if (sim && !this.paused) {
       this.acc += dt;
@@ -293,6 +354,9 @@ export class Game {
       this.modeView?.update(this.views, vdt);
       const r = live.rules;
       if (r.mode === 'potato' && r.phase === 'fight' && r.potatoHolder >= 0 && vdt > 0) this.sfx.tick(r.potatoTimer < 4);
+      this.tracker?.tick(vdt, r.phase === 'fight');
+    } else if (this.previewState) {
+      this.updatePreview(dt);
     } else {
       // Idle attract camera: slow orbit over the empty arena.
       this.gfx.camera.position.set(Math.sin(t * 0.15) * 15, 8.5, Math.cos(t * 0.15) * 15);
@@ -320,6 +384,8 @@ export class Game {
   private switchArena(arena: ArenaDef, resume: { round: number; scores: number[] }): void {
     this.sim?.dispose();
     this.showArena(arena);
+    this.tracker?.arena(arena.id);
+    this.sfx.setMusic(arena.theme);
     this.sim = this.makeSim(arena, resume);
     this.refreshMode();
     this.bots = this.fighters.map((f, i) => (f.device === 'bot' ? new Bot(i, (Math.random() * 1e9) | 0, 0.45 + Math.random() * 0.35) : null));
@@ -328,7 +394,69 @@ export class Game {
     for (const ev of this.sim.drainEvents()) this.handleEvent(ev);
   }
 
+  // ------------------------------------------------------------ customise preview
+  private previewState: { sim: GameSim; view: CharacterView; emote: boolean } | null = null;
+
+  /** Show one fighter wobbling about on its own (Customise screen). */
+  startPreview(look: FighterLook): void {
+    if (this.running) return;
+    this.stopPreview();
+    const sim = new GameSim({ arena: this.arena, players: 1, sandbox: true, looks: [{ emote: look.emote, victory: look.victory }] });
+    const s = this.arena.spawns[0];
+    sim.characters[0].reset(sim.world, { x: s.x, y: s.y + 0.02, z: s.z }, 0);
+    const view = new CharacterView(look, 0);
+    this.gfx.scene.add(view.root);
+    this.previewState = { sim, view, emote: false };
+  }
+
+  /** Swap the previewed look (keeps the physics running). */
+  previewLook(look: FighterLook): void {
+    const p = this.previewState;
+    if (!p) return this.startPreview(look);
+    this.gfx.scene.remove(p.view.root);
+    p.view.dispose();
+    p.view = new CharacterView(look, 0);
+    this.gfx.scene.add(p.view.root);
+    p.sim.characters[0].emoteKind = look.emote;
+    p.sim.characters[0].victoryKind = look.victory;
+  }
+
+  previewEmote(): void {
+    if (this.previewState) this.previewState.emote = true;
+  }
+
+  previewVictory(): void {
+    this.previewState?.sim.characters[0].celebrate(3);
+  }
+
+  stopPreview(): void {
+    if (!this.previewState) return;
+    this.gfx.scene.remove(this.previewState.view.root);
+    this.previewState.view.dispose();
+    this.previewState.sim.dispose();
+    this.previewState = null;
+  }
+
+  private updatePreview(dt: number): void {
+    const p = this.previewState!;
+    const sim = p.sim;
+    this.acc += dt;
+    while (this.acc >= sim.dt) {
+      sim.step([{ ...emptyInput(), emote: p.emote }]);
+      sim.drainEvents();
+      p.emote = false;
+      this.acc -= sim.dt;
+    }
+    const c = sim.characters[0];
+    p.view.update(c, sim.prevSnap, sim.currSnap, sim.partOffset(0, 0), Math.min(1, this.acc / sim.dt), dt);
+    const at = c.torsoPos;
+    // Fighter on the right of the screen; the customise panel sits on the left.
+    this.gfx.camera.position.set(at.x - 1.5, at.y + 0.9, at.z + 3.6);
+    this.gfx.camera.lookAt(at.x - 1.25, at.y + 0.1, at.z);
+  }
+
   private handleEvent(ev: SimEvent): void {
+    this.tracker?.feed(ev);
     const sfx = this.sfx;
     const look = (i: number) => this.fighters[i]?.look ?? FIGHTERS[0];
     switch (ev.type) {

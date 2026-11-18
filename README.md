@@ -59,6 +59,29 @@ uses `wss://` automatically on HTTPS pages) and share the room's invite link.
 - **In a match:** the server simulates everything (positions, physics, hits, knockouts, eliminations, rounds); clients send inputs and render interpolated snapshots ~120 ms behind. Knocked out of the round? Your screen goes grey and you spectate. Leave mid-match and a bot takes over your fighter; players who join mid-match watch until the next one. After the match winner is crowned everyone returns to the lobby.
 - Your online identity, name, fighter and friends list are stored in this browser only.
 
+## Menus, customisation and progression
+
+The game opens on the **main menu**: Play (local / online), Customise,
+Settings, Statistics and Friends.
+
+- **Customise:** 10 characters, 16 colours (body, trousers, hat), 13 hats,
+  7 outfits, 8 extras, 6 emotes and 5 victory animations, previewed live on a
+  wobbling physics fighter. Items are free, unlocked by level, or bought with
+  coins. Everything is cosmetic. Your look is P1's locally and yours online.
+- **Progression:** every match earns XP and coins (playing, rounds won,
+  knockouts, ring-outs, winning; a small online bonus). Levels 1–50 with rank
+  titles (Jelly Rookie → Wobble Weight Champion) unlock items automatically;
+  level-ups pay bonus coins. A results screen shows the breakdown.
+- **Statistics:** matches/rounds won, knockouts, ring-outs, falls, punches,
+  kicks, headbutts, dives, throws, climbs, time played, wins per mode,
+  favourite map.
+- **Settings:** master / effects / music volume, hold-to-punch, mouse
+  controls, camera shake, graphics quality (auto/high/medium/low), key
+  remapping, progress reset.
+- Profile and settings are saved in this browser only (not synced between
+  devices); `src/client/profile.ts` has a `ProfileStore` interface where a
+  cloud save can plug in.
+
 ## Game modes
 
 Every mode is played in rounds; the first player (or team) to win three rounds
@@ -104,6 +127,7 @@ in a draw at 4 minutes.
 | Lift (hold) | L / R / middle mouse | Num 3 / `'` | LT |
 | Dive / tackle | U / C | Num 6 / N | RB |
 | Sprint | L-Shift | Num . / R-Ctrl | LB / L3 |
+| Emote | T | Num 7 / `\\` | Back / Select |
 | Pause | Esc | Esc | Start |
 
 **Throwing:** hold Grab until your hands stick to someone, hold Lift to hoist
@@ -137,6 +161,7 @@ src/
     arenas/       The four maps as plain data
     arenaRuntime.ts  Moving machinery, breakables, hazard zones, timed events
     modes.ts      Mode definitions, teams/sides helpers
+    (meta/)       Cosmetics catalogue, loadouts, XP/levels/ranks/coins/unlocks/stats (src/meta)
     rules.ts      Round rules for every mode (sides, lives, hill, trophy, potato), first to 3, time limit, map rotation
     bot.ts        AI that produces the same inputs a player would
     config.ts     All tuning numbers

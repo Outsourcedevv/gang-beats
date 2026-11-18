@@ -2,7 +2,10 @@ import type { NetClient } from '../net/netClient';
 import type { RoomInfo, ServerMsg } from '../../net/protocol';
 import { MAX_ROOM } from '../../net/protocol';
 import { ARENAS } from '../../sim/arenas';
-import { FIGHTERS } from '../render/fighters';
+import { FIGHTERS, lookFrom } from '../render/fighters';
+import type { Loadout } from '../../meta/cosmetics';
+import { presetLoadout } from '../../meta/cosmetics';
+import type { ProfileService } from '../profile';
 import { MODES, TEAM_COLORS, TEAM_NAMES, modeDef } from '../../sim/modes';
 import type { Settings } from '../storage';
 import { saveSettings } from '../storage';
@@ -25,8 +28,8 @@ export function h<K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Attrs = 
 
 const hex = (n: number) => '#' + n.toString(16).padStart(6, '0');
 
-function avatar(fighter: number): HTMLElement {
-  const look = FIGHTERS[fighter] ?? FIGHTERS[0];
+export function avatar(loadout: Loadout): HTMLElement {
+  const look = lookFrom(loadout);
   return h(
     'div',
     { class: 'avatar small', style: `--c:${hex(look.body)};--p:${hex(look.pants)}` },
@@ -60,7 +63,9 @@ export class OnlineUI {
     private readonly sfx: Sfx,
     private readonly hooks: OnlineHooks,
     root: HTMLElement,
+    private readonly profiles: ProfileService,
   ) {
+    profiles.onChange(() => this.net.setProfile(this.name, this.loadout));
     this.toastEl = h('div', { class: 'toasts' });
     root.append(this.toastEl);
     net.onMessage = (m) => this.handle(m);
@@ -77,13 +82,14 @@ export class OnlineUI {
     return this.settings.playerName ?? 'Player';
   }
 
-  get fighter(): number {
-    return this.settings.onlineFighter ?? 0;
+  /** Online, you wear your customised loadout. */
+  get loadout(): Loadout {
+    return this.profiles.profile.loadout;
   }
 
   /** Called when the online tab is shown. */
   activate(): void {
-    if (this.net.status === 'offline') this.net.connect(this.name, this.fighter);
+    if (this.net.status === 'offline') this.net.connect(this.name, this.loadout);
     if (!this.friendTimer) {
       this.friendTimer = setInterval(() => this.refreshFriends(), 5000);
       this.refreshFriends();
@@ -185,7 +191,7 @@ export class OnlineUI {
         { class: 'online' },
         h('p', { class: 'status' }, net.status === 'connecting' ? 'Connecting to the game server…' : net.lastError || 'Offline.'),
         net.status === 'offline'
-          ? h('button', { class: 'btn', onclick: () => this.net.connect(this.name, this.fighter) }, 'Retry')
+          ? h('button', { class: 'btn', onclick: () => this.net.connect(this.name, this.loadout) }, 'Retry')
           : null,
         h('p', { class: 'note' }, 'Online play needs the Wobble Weights server running (see README: npm run dev / npm start).'),
       );
@@ -195,17 +201,10 @@ export class OnlineUI {
 
   private profile(): HTMLElement {
     const s = this.settings;
-    const cycle = (d: number) => () => {
-      s.onlineFighter = (this.fighter + d + FIGHTERS.length) % FIGHTERS.length;
-      this.persist();
-      this.net.setProfile(this.name, this.fighter);
-      this.sfx.click();
-      this.hooks.rerender();
-    };
     return h(
       'div',
       { class: 'profile' },
-      avatar(this.fighter),
+      avatar(this.loadout),
       h(
         'div',
         { class: 'profile-fields' },
@@ -221,17 +220,11 @@ export class OnlineUI {
             onchange: (e: Event) => {
               s.playerName = (e.target as HTMLInputElement).value.slice(0, 16) || 'Player';
               this.persist();
-              this.net.setProfile(this.name, this.fighter);
+              this.net.setProfile(this.name, this.loadout);
             },
           }),
         ),
-        h(
-          'div',
-          { class: 'fighter-pick' },
-          h('button', { class: 'arrow', onclick: cycle(-1), 'aria-label': 'Previous fighter' }, '◀'),
-          h('span', { class: 'fighter-name' }, FIGHTERS[this.fighter].name),
-          h('button', { class: 'arrow', onclick: cycle(1), 'aria-label': 'Next fighter' }, '▶'),
-        ),
+        h('span', { class: 'note' }, 'Change your look in Customise (main menu).'),
       ),
     );
   }
@@ -265,7 +258,7 @@ export class OnlineUI {
     );
   }
 
-  private friendsPanel(inRoom: boolean): HTMLElement {
+  friendsPanel(inRoom: boolean): HTMLElement {
     const s = this.settings;
     const friends = s.friends ?? [];
     const status = (code: string) => this.net.friends.find((f) => f.code === code);
@@ -380,7 +373,7 @@ export class OnlineUI {
           h(
             'li',
             { class: m.ready ? 'ready' : '' },
-            avatar(m.fighter),
+            avatar(m.loadout),
             h('span', { class: 'mname' }, (m.host ? '👑 ' : '') + m.name + (m.id === me?.id ? ' (you)' : '')),
             teamsOn
               ? h(
@@ -400,7 +393,7 @@ export class OnlineUI {
           ),
         ),
         ...Array.from({ length: Math.min(room.settings.bots, MAX_ROOM - room.members.length) }, (_, i) =>
-          h('li', { class: 'bot' }, avatar((room.members.length + i) % FIGHTERS.length), h('span', { class: 'mname' }, `Bot ${i + 1}`), h('span', { class: 'mstate' }, 'bot')),
+          h('li', { class: 'bot' }, avatar(presetLoadout((room.members.length + i) % FIGHTERS.length)), h('span', { class: 'mname' }, `Bot ${i + 1}`), h('span', { class: 'mstate' }, 'bot')),
         ),
       ),
       this.profile(),

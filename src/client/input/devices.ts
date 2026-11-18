@@ -14,8 +14,8 @@ export const DEVICE_LABELS: Record<DeviceId, string> = {
   off: 'Empty',
 };
 
-export type Action = 'up' | 'down' | 'left' | 'right' | 'jump' | 'punch' | 'grab' | 'lift' | 'kick' | 'headbutt' | 'dive' | 'sprint';
-export const ACTIONS: Action[] = ['up', 'down', 'left', 'right', 'jump', 'punch', 'grab', 'lift', 'kick', 'headbutt', 'dive', 'sprint'];
+export type Action = 'up' | 'down' | 'left' | 'right' | 'jump' | 'punch' | 'grab' | 'lift' | 'kick' | 'headbutt' | 'dive' | 'sprint' | 'emote';
+export const ACTIONS: Action[] = ['up', 'down', 'left', 'right', 'jump', 'punch', 'grab', 'lift', 'kick', 'headbutt', 'dive', 'sprint', 'emote'];
 export const ACTION_LABELS: Record<Action, string> = {
   up: 'Move up',
   down: 'Move down',
@@ -29,6 +29,7 @@ export const ACTION_LABELS: Record<Action, string> = {
   headbutt: 'Headbutt',
   dive: 'Dive / tackle',
   sprint: 'Sprint',
+  emote: 'Emote',
 };
 
 /** Keyboard bindings: each action maps to one or more `KeyboardEvent.code`s. */
@@ -48,6 +49,7 @@ export const DEFAULT_BINDINGS: Record<'kbA' | 'kbB', KeyBindings> = {
     headbutt: ['KeyO', 'KeyQ'],
     dive: ['KeyU', 'KeyC'],
     sprint: ['ShiftLeft'],
+    emote: ['KeyT'],
   },
   kbB: {
     up: ['ArrowUp'],
@@ -62,6 +64,7 @@ export const DEFAULT_BINDINGS: Record<'kbA' | 'kbB', KeyBindings> = {
     headbutt: ['Numpad5', 'KeyM'],
     dive: ['Numpad6', 'KeyN'],
     sprint: ['NumpadDecimal', 'ControlRight'],
+    emote: ['Numpad7', 'Backslash'],
   },
 };
 
@@ -89,7 +92,7 @@ export function keyLabel(code: string): string {
 }
 
 // Standard mapping: A jump, X punch, B kick, Y headbutt, RT grab, LT lift, RB dive, LB / L3 sprint.
-const GAMEPAD = { jump: [0], punch: [2], kick: [1], headbutt: [3], grab: [7], lift: [6], dive: [5], sprint: [4, 10] };
+const GAMEPAD = { jump: [0], punch: [2], kick: [1], headbutt: [3], grab: [7], lift: [6], dive: [5], sprint: [4, 10], emote: [8] };
 const DEADZONE = 0.22;
 
 /**
@@ -167,6 +170,7 @@ export class InputManager {
       inp.kick = this.key(b.kick);
       inp.headbutt = this.key(b.headbutt);
       inp.dive = this.key(b.dive);
+      inp.emote = this.key(b.emote);
       if (device === 'kbA' && this.mouseEnabled) {
         inp.punch ||= this.mouse.has(0) || this.mouseLatched.has(0);
         inp.grab ||= this.mouse.has(2);
@@ -202,6 +206,7 @@ export class InputManager {
         inp.kick = btn(GAMEPAD.kick);
         inp.headbutt = btn(GAMEPAD.headbutt);
         inp.dive = btn(GAMEPAD.dive);
+        inp.emote = btn(GAMEPAD.emote);
         if (pad.buttons[9]?.pressed) this.padPause(Number(device.slice(3)));
       }
     }

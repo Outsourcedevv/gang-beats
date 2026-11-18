@@ -4,6 +4,7 @@ import { ACTIONS, InputManager } from './input/devices';
 import { Sfx } from './audio/sfx';
 import { UI } from './ui/ui';
 import { loadSettings } from './storage';
+import { ProfileService } from './profile';
 
 async function boot(): Promise<void> {
   await initPhysics();
@@ -30,7 +31,8 @@ async function boot(): Promise<void> {
   window.addEventListener('pointerdown', unlock);
   window.addEventListener('keydown', unlock);
   const game = new Game(app, input, sfx);
-  new UI(game, input, sfx, settings);
+  const profiles = new ProfileService();
+  new UI(game, input, sfx, settings, profiles);
   document.getElementById('loading')?.remove();
   // Exposed for automated browser tests / debugging only.
   (window as unknown as { __game: Game }).__game = game;

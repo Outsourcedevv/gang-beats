@@ -6,6 +6,7 @@ import { PROTOCOL_VERSION, WS_PATH } from '../src/net/protocol';
 import { decodeSnapshot, encodeInput } from '../src/net/codec';
 import type { Snapshot } from '../src/net/codec';
 import { emptyInput } from '../src/sim/input';
+import { defaultLoadout } from '../src/meta/cosmetics';
 
 let server: Awaited<ReturnType<typeof startServer>>;
 let url = '';
@@ -45,7 +46,7 @@ class Client {
 
   async open(): Promise<this> {
     await new Promise<void>((ok) => this.ws.once('open', () => ok()));
-    this.send({ t: 'hello', v: PROTOCOL_VERSION, playerId: `test-${this.name}-${Math.random()}`, name: this.name, fighter: 0 });
+    this.send({ t: 'hello', v: PROTOCOL_VERSION, playerId: `test-${this.name}-${Math.random()}`, name: this.name, loadout: defaultLoadout() });
     await this.until(() => this.friendCode !== '');
     return this;
   }
@@ -255,6 +256,30 @@ describe('multiplayer modes', () => {
     expect(ms.sides.filter((x) => x === ms.sides[0]).length).toBe(2); // bots balanced the teams
     await a.until(() => a.snaps.length > 2);
     expect(a.snaps.at(-1)!.scores.length).toBe(2);
+    a.close();
+    b.close();
+  }, 20000);
+});
+
+describe('cosmetics online', () => {
+  it('player loadouts are sanitised and shown to everyone, and used in the match', async () => {
+    const a = await new Client('Lou').open();
+    const b = await new Client('Max').open();
+    a.send({ t: 'profile', name: 'Lou', loadout: { ...defaultLoadout('duchess'), hat: 'crown', outfit: 'cape', emote: 'dance', victory: 'backflip' } });
+    b.send({ t: 'profile', name: 'Max', loadout: { ...defaultLoadout(), hat: 'not-a-hat' as never } });
+    a.send({ t: 'create', private: true });
+    await a.until(() => !!a.room);
+    b.send({ t: 'join', code: a.room!.code });
+    await b.until(() => b.room?.members.length === 2);
+    const lou = b.room!.members.find((m) => m.name === 'Lou')!;
+    expect(lou.loadout).toMatchObject({ character: 'duchess', hat: 'crown', outfit: 'cape' });
+    expect(b.room!.members.find((m) => m.name === 'Max')!.loadout.hat).toBe('beanie');
+    a.send({ t: 'start' });
+    await b.until(() => !!b.last('matchStart'));
+    expect(b.last('matchStart')!.slots[0].loadout.hat).toBe('crown');
+    const room = server.hub.rooms.get(a.room!.code)!;
+    expect(room.match!.sim.characters[0].emoteKind).toBe('dance');
+    expect(room.match!.sim.characters[0].victoryKind).toBe('backflip');
     a.close();
     b.close();
   }, 20000);

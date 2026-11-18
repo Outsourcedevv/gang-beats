@@ -1,5 +1,7 @@
 import type { ClientMsg, FriendStatus, RoomInfo, ServerMsg } from '../../net/protocol';
 import { PROTOCOL_VERSION, WS_PATH } from '../../net/protocol';
+import type { Loadout } from '../../meta/cosmetics';
+import { defaultLoadout } from '../../meta/cosmetics';
 
 export type NetStatus = 'offline' | 'connecting' | 'online';
 
@@ -21,7 +23,7 @@ export class NetClient {
   private retry = 0;
   private wantOnline = false;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
-  private profile = { name: 'Player', fighter: 0 };
+  private profile: { name: string; loadout: Loadout } = { name: 'Player', loadout: defaultLoadout() };
   private queued: ClientMsg[] = [];
 
   onChange: Handler<void> | null = null;
@@ -33,8 +35,8 @@ export class NetClient {
     private readonly url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}${WS_PATH}`,
   ) {}
 
-  connect(name: string, fighter: number): void {
-    this.profile = { name, fighter };
+  connect(name: string, loadout: Loadout): void {
+    this.profile = { name, loadout };
     this.wantOnline = true;
     if (this.ws) return;
     this.status = 'connecting';
@@ -44,7 +46,7 @@ export class NetClient {
     this.ws = ws;
     ws.onopen = () => {
       this.retry = 0;
-      ws.send(JSON.stringify({ t: 'hello', v: PROTOCOL_VERSION, playerId: this.playerId, name: this.profile.name, fighter: this.profile.fighter }));
+      ws.send(JSON.stringify({ t: 'hello', v: PROTOCOL_VERSION, playerId: this.playerId, name: this.profile.name, loadout: this.profile.loadout }));
     };
     ws.onmessage = (e) => {
       if (typeof e.data !== 'string') {
@@ -69,7 +71,7 @@ export class NetClient {
       if (this.wantOnline) {
         // Reconnect with backoff.
         const wait = Math.min(8000, 500 * 2 ** this.retry++);
-        setTimeout(() => this.wantOnline && this.connect(this.profile.name, this.profile.fighter), wait);
+        setTimeout(() => this.wantOnline && this.connect(this.profile.name, this.profile.loadout), wait);
       }
     };
     ws.onerror = () => {
@@ -118,9 +120,9 @@ export class NetClient {
     if (this.ws && this.status === 'online' && this.ws.bufferedAmount < 64 * 1024) this.ws.send(buf);
   }
 
-  setProfile(name: string, fighter: number): void {
-    this.profile = { name, fighter };
-    if (this.status === 'online') this.send({ t: 'profile', name, fighter });
+  setProfile(name: string, loadout: Loadout): void {
+    this.profile = { name, loadout };
+    if (this.status === 'online') this.send({ t: 'profile', name, loadout });
   }
 
   private changed(): void {

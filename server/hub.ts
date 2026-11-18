@@ -3,6 +3,7 @@ import type { ClientMsg, FriendStatus } from '../src/net/protocol';
 import { PROTOCOL_VERSION, MAX_ROOM, MSG_INPUT } from '../src/net/protocol';
 import { Conn } from './conn';
 import { Room } from './room';
+import { sanitizeLoadout } from '../src/meta/cosmetics';
 
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no I/O/0/1
 
@@ -135,7 +136,7 @@ export class Hub {
         const id = String(msg.playerId ?? '').replace(/[^a-zA-Z0-9-]/g, '').slice(0, 64) || Math.random().toString(36).slice(2);
         conn.id = id;
         conn.name = sanitizeName(msg.name);
-        conn.fighter = Number.isInteger(msg.fighter) ? Math.max(0, Math.min(5, msg.fighter)) : 0;
+        conn.loadout = sanitizeLoadout(msg.loadout);
         conn.friendCode = friendCodeFor(id);
         // Same player connecting twice (another tab): the older connection is dropped.
         const old = this.byFriend.get(conn.friendCode);
@@ -151,7 +152,7 @@ export class Hub {
       }
       case 'profile':
         conn.name = sanitizeName(msg.name);
-        conn.fighter = Number.isInteger(msg.fighter) ? Math.max(0, Math.min(5, msg.fighter)) : conn.fighter;
+        conn.loadout = sanitizeLoadout(msg.loadout);
         conn.room?.markDirty();
         return;
       case 'quickPlay': {

@@ -18,7 +18,11 @@ export class CameraRig {
     private readonly maxDist = 24,
   ) {}
 
+  /** 0 disables shake entirely (accessibility setting). */
+  shakeScale = 1;
+
   addShake(amount: number): void {
+    amount *= this.shakeScale;
     this.shake = Math.min(0.12, this.shake + amount);
   }
 

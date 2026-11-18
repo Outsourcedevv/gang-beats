@@ -4,6 +4,7 @@ import { PART_DEFS, PART_INDEX } from '../../sim/ragdoll';
 import type { PartName } from '../../sim/ragdoll';
 import type { FighterLook } from './fighters';
 import { starTexture } from './textures';
+import { buildAccessory, buildHat, buildOutfit } from './cosmeticMeshes';
 
 const tmpQ = new THREE.Quaternion();
 
@@ -39,6 +40,9 @@ export class CharacterView {
   private mouth!: THREE.Mesh;
   private stars: THREE.Sprite[] = [];
   private sweat!: THREE.Mesh;
+  private animations: ((t: number) => void)[] = [];
+  private outfitAnim: ((t: number, speed: number) => void) | null = null;
+  private lastTorso = new THREE.Vector3();
   private squash = 0;
   private squashVel = 0;
   private blinkTimer = 2;
@@ -62,6 +66,7 @@ export class CharacterView {
     this.head = this.parts[PART_INDEX.head];
     this.buildFace();
     this.buildHat();
+    this.buildCosmetics();
     this.buildStars();
     this.sweat = new THREE.Mesh(
       new THREE.SphereGeometry(0.05, 10, 8),
@@ -203,61 +208,27 @@ export class CharacterView {
   }
 
   private buildHat(): void {
-    const { hat, hatColor, hatAccent } = this.look;
-    const m = new THREE.MeshStandardMaterial({ color: hatColor, roughness: 0.7 });
-    const a = new THREE.MeshStandardMaterial({ color: hatAccent, roughness: 0.6 });
-    const g = new THREE.Group();
-    const add = (mesh: THREE.Mesh) => {
-      mesh.castShadow = true;
-      g.add(mesh);
-      return mesh;
-    };
-    switch (hat) {
-      case 'beanie': {
-        const dome = add(new THREE.Mesh(new THREE.SphereGeometry(0.305, 22, 12, 0, Math.PI * 2, 0, Math.PI / 2), m));
-        dome.position.y = 0.12;
-        dome.scale.set(0.92, 0.75, 0.92);
-        const band = add(new THREE.Mesh(new THREE.TorusGeometry(0.262, 0.045, 10, 24), m));
-        band.rotation.x = Math.PI / 2;
-        band.position.y = 0.155;
-        const pom = add(new THREE.Mesh(new THREE.SphereGeometry(0.08, 12, 10), a));
-        pom.position.y = 0.38;
-        break;
-      }
-      case 'tophat': {
-        const brim = add(new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.26, 0.03, 24), m));
-        brim.position.y = 0.24;
-        const crown = add(new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.16, 0.3, 24), m));
-        crown.position.y = 0.4;
-        const ribbon = add(new THREE.Mesh(new THREE.CylinderGeometry(0.162, 0.162, 0.05, 24), a));
-        ribbon.position.y = 0.28;
-        g.rotation.z = 0.18;
-        break;
-      }
-      case 'cone': {
-        const cone = add(new THREE.Mesh(new THREE.ConeGeometry(0.2, 0.42, 20), m));
-        cone.position.y = 0.42;
-        const stripe = add(new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.135, 0.07, 20), a));
-        stripe.position.y = 0.44;
-        const base = add(new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.04, 0.42), m));
-        base.position.y = 0.22;
-        g.rotation.z = -0.12;
-        break;
-      }
-      case 'headphones': {
-        const band = add(new THREE.Mesh(new THREE.TorusGeometry(0.3, 0.035, 8, 24, Math.PI), a));
-        band.position.y = 0.02;
-        for (const s of [1, -1]) {
-          const cup = add(new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.11, 0.08, 18), m));
-          cup.rotation.z = Math.PI / 2;
-          cup.position.set(s * 0.3, 0.0, 0);
-        }
-        break;
-      }
-      case 'none':
-        break;
+    const { group, animate } = buildHat(this.look.hat, this.look.hatColor, this.look.hatAccent);
+    this.head.add(group);
+    if (animate) this.animations.push(animate);
+  }
+
+  /** Outfit and accessory meshes. */
+  private buildCosmetics(): void {
+    const torso = this.parts[PART_INDEX.torso];
+    const outfit = buildOutfit(this.look.outfit, this.look.body, this.look.pants);
+    torso.add(outfit.torso);
+    if (outfit.head) this.head.add(outfit.head);
+    if (outfit.torsoMap) {
+      const m = this.torsoMesh.material as THREE.MeshPhysicalMaterial;
+      m.map = outfit.torsoMap;
+      m.color.setHex(0xffffff);
+      m.needsUpdate = true;
     }
-    this.head.add(g);
+    if (outfit.animate) this.outfitAnim = outfit.animate;
+    const acc = buildAccessory(this.look.accessory);
+    if (acc.head) this.head.add(acc.head);
+    if (acc.torso) torso.add(acc.torso);
   }
 
   private buildStars(): void {
@@ -292,6 +263,13 @@ export class CharacterView {
       g.quaternion.copy(tmpQ);
     }
 
+    for (const f of this.animations) f(this.time);
+    if (this.outfitAnim) {
+      const tp = this.parts[PART_INDEX.torso].position;
+      const speed = dt > 0 ? tp.distanceTo(this.lastTorso) / dt : 0;
+      this.lastTorso.copy(tp);
+      this.outfitAnim(this.time, speed);
+    }
     // Squash & stretch spring.
     this.squashVel += (-this.squash * 220 - this.squashVel * 14) * dt;
     this.squash += this.squashVel * dt;

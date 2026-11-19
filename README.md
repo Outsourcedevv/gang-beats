@@ -42,6 +42,7 @@ npm start
 | `npm run dev` | Game server (auto-rebuild/restart) + Vite client |
 | `npm run dev:client` | Client only (local play) |
 | `npm run build` | Type-check, build the client (`dist/`) and the server (`dist-server/`) |
+| `npm run build:web` | Local-play-only static build in `dist-web/` (no server needed; the Online tab says it's unavailable) |
 | `npm start` | Run the production server (`/health` reports rooms/players) |
 | `npm test` | Headless simulation, map, codec and multiplayer-server tests (Vitest) |
 | `npm run test:e2e` | Three real browser clients playing online together (needs Playwright, see the file header) |

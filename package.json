@@ -8,6 +8,7 @@
     "dev:client": "vite",
     "build": "tsc --noEmit && vite build && vite build --ssr server/index.ts --outDir dist-server",
     "build:server": "vite build --ssr server/index.ts --outDir dist-server",
+    "build:web": "VITE_OFFLINE=1 vite build --base ./ --outDir dist-web",
     "start": "node dist-server/index.js",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",

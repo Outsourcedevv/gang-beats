@@ -1,4 +1,5 @@
 import type { NetClient } from '../net/netClient';
+import { OFFLINE_BUILD } from '../offline';
 import type { RoomInfo, ServerMsg } from '../../net/protocol';
 import { MAX_ROOM } from '../../net/protocol';
 import { ARENAS } from '../../sim/arenas';
@@ -89,6 +90,7 @@ export class OnlineUI {
 
   /** Called when the online tab is shown. */
   activate(): void {
+    if (OFFLINE_BUILD) return;
     if (this.net.status === 'offline') this.net.connect(this.name, this.loadout);
     if (!this.friendTimer) {
       this.friendTimer = setInterval(() => this.refreshFriends(), 5000);
@@ -185,6 +187,14 @@ export class OnlineUI {
   // ------------------------------------------------------------------ render
   render(): HTMLElement {
     const net = this.net;
+    if (OFFLINE_BUILD) {
+      return h(
+        'div',
+        { class: 'online' },
+        h('p', { class: 'status' }, 'Online play isn’t available in this copy of the game.'),
+        h('p', { class: 'note' }, 'This copy runs only in your browser, without the game server. Use the Local tab to play on one screen with friends and bots. To play online, run the game server yourself (see the README: npm run build, then npm start).'),
+      );
+    }
     if (net.status !== 'online') {
       return h(
         'div',
@@ -259,6 +269,7 @@ export class OnlineUI {
   }
 
   friendsPanel(inRoom: boolean): HTMLElement {
+    if (OFFLINE_BUILD) return h('p', { class: 'note' }, 'Friends and invites need the online game server, which this copy of the game doesn’t have.');
     const s = this.settings;
     const friends = s.friends ?? [];
     const status = (code: string) => this.net.friends.find((f) => f.code === code);
